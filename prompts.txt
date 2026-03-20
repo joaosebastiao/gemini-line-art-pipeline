@@ -1,0 +1,15 @@
+Generate an illustration in exactly the same art style as the reference illustrations. Black and white line art, no shading at all. Aspect ratio square 1:1. Framing: A square aspect ratio enclosed within a thick, hand-drawn black border.
+Make everything slightly oversized, with no small details. Everything should be smooth and rounded, as if every element of the illustration is cute and inflated. There are no sharp edges in any lines. Everything looks close together and crowded. Have less elements, but each one is bigger, instead of a lot of small elements. Square 1:1 aspect ratio.
+Texture: Absolutely no texture or hatching. If something is made of wood, don't draw the wood grain for example.
+2. Composition & Framing
+Framing: A square aspect ratio enclosed within a thick, hand-drawn black border.
+Perspective: Always generate the illustration in perspective to give the illustration depth
+Layout: A cozy scene with an asymmetrical perspective layout.
+Depth layering:
+Foreground: A water bottle, a star-shaped wand, a heart-shaped wand, a dumbbell, and a potted plant.
+Mid-ground: An anthropomorphic dog wearing a hoodie and shorts, stacked crates, a dumbbell, and a speaker.
+Background: A wall mirror reflecting the dog and other animal figures, posters hanging on the wall, and a window.
+3. Subject Matter & Action
+Characters positioning: The dog is positioned in the center, facing forward with one paw raised, the other arm extended, and one leg lifted.
+Activity: Dancing in a studio.
+4. Detailed Elements: Water bottle with a cap, star-shaped wand, heart-shaped wand, potted plant with leaves, dumbbells, dog character, hoodie, shorts, stacked crates, speaker, wall mirror, reflections of animal characters, posters, window with panes.

@@ -1,0 +1,10 @@
+node_modules/
+user_data/
+downloads/
+draft_downloads/
+line art/
+references/
+draft_references/
+generated_prompts/
+.env
+.DS_Store

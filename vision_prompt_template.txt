@@ -1,0 +1,19 @@
+Don't generate an image, I want you to give me just text. Fill out the following prompt based on the reference image I'm attaching. Don't write any introduction like "here is the prompt", write just the prompt. Start writing only from the Depth Layering part, don't edit anything before that. But include the entire prompt in your response. Don't include any color references in your description, since this is for a black and white line art illustration prompt. Don't describe the line style. Don't describe any textures. Don't use words like massive or huge, or oversized. Don't describe the size of anything. Don't write anything after the prompt.
+
+Prompt:
+
+Generate an illustration in exactly the same art style as the reference illustrations. Black and white line art, no shading at all. Aspect ratio square 1:1. Framing: A square aspect ratio enclosed within a thick, hand-drawn black border.
+Make everything slightly oversized, with no small details. Everything should be smooth and rounded, as if every element of the illustration is cute and inflated. There are no sharp edges in any lines. Everything looks close together and crowded. Have less elements, but each one is bigger, instead of a lot of small elements. Square 1:1 aspect ratio. 
+Texture: Absolutely no texture or hatching. If something is made of wood, don't draw the wood grain for example.
+2. Composition & Framing
+Framing: A square aspect ratio enclosed within a thick, hand-drawn black border.
+Perspective: Always generate the illustration in perspective to give the illustration depth
+Layout: A cozy scene with an asymmetrical perspective layout.
+Depth layering:
+Foreground: 
+Mid-ground: 
+Background: 
+3. Subject Matter & Action
+Characters positioning: 
+Activity: 
+4. Detailed Elements

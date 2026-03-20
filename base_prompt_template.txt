@@ -1,0 +1,5 @@
+Brainstorm {numIdeas} page ideas for a cozy coloring book. Each idea should be just one sentence, and include a setting, and a character doing an action. Be as varied as possible in your settings and actions. I'm going to use your answer as a prompt, so write three dashes --- like this between each idea. Also don't write anything before or after the ideas. Output as a code block.
+
+For the character, always say: {character}
+
+Theme: {theme}
