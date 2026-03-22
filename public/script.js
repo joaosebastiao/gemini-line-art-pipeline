@@ -179,6 +179,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const saveVisionCharStatus = document.getElementById('save-vision-char-status');
     const autoVisionCharInput = document.getElementById('auto-vision-character');
     
+    // Auto Pilot Dashboard Option Fillers
+    const conceptFileDropdown = document.getElementById('auto-concept-file');
+    if (conceptFileDropdown) {
+        fetch('http://localhost:3000/api/generated-prompts-list')
+            .then(res => res.json())
+            .then(data => {
+                data.files.forEach(f => {
+                    const opt = document.createElement('option');
+                    opt.value = f;
+                    opt.textContent = `Load Archive: ${f}`;
+                    conceptFileDropdown.appendChild(opt);
+                });
+            })
+            .catch(err => console.error('Failed to load concept list:', err));
+    }
+
     if (visionCharInput && saveVisionCharBtn) {
         fetch('http://localhost:3000/api/vision-character-file')
             .then(res => res.json())
@@ -540,153 +556,186 @@ document.addEventListener('DOMContentLoaded', () => {
             updateAutoTimer();
 
             try {
-                // STAGE 1 & 2: Concepts + Draft Wrapping
-                setAutoProgress(10, 'Stage 1: Pinging Gemini for core concepts...');
-                const basePrompt = document.getElementById('base-prompt').value;
-                const draftTemplate = document.getElementById('draft-wrapper-prompt').value;
-                const character = document.getElementById('character').value;
-                const autoNotesElement = document.getElementById('auto-notes');
-                const notes = autoNotesElement ? autoNotesElement.value.trim() : '';
+                const conceptFileDropdown = document.getElementById('auto-concept-file');
+                const selectedFile = conceptFileDropdown ? conceptFileDropdown.value : '';
+                const autoUseSaved = selectedFile !== '';
                 const numPages = parseInt(document.getElementById('auto-pages').value) || 1;
-
-                let finalPrompt = basePrompt
-                    .replace(/{numIdeas}/g, numPages)
-                    .replace(/{character}/g, character)
-                    .replace(/{theme}/g, rawTheme);
+                
+                let rawPayloads = [];
+                let rawIdeas = [];
+                
+                if (autoUseSaved) {
+                    setAutoProgress(10, 'Stage 1: Loading pre-saved Concept Prompts natively from disk...');
+                    const savedRes = await fetch(`http://localhost:3000/api/draft-prompts-file?file=${encodeURIComponent(selectedFile)}`);
+                    const savedData = await savedRes.json();
+                    const savedText = (savedData.content || '').trim();
+                    if (!savedText) throw new Error("No saved concepts found for this archive offline! Select 'Generate New' to launch new payload generations natively.");
                     
-                if (finalPrompt.includes('{notes}')) {
-                    finalPrompt = finalPrompt.replace(/{notes}/g, notes);
-                } else if (notes) {
-                    finalPrompt += `\n\nNotes: ${notes}`;
+                    rawPayloads = savedText.split('---').map(s => s.trim()).filter(s => s.length > 5);
+                    if (numPages > 0 && numPages < rawPayloads.length) {
+                        rawPayloads = rawPayloads.slice(0, numPages);
+                    }
+                    
+                    rawIdeas = rawPayloads.map((_, idx) => `Concept ${idx + 1} loaded organically from disk payloads`);
+                    console.log(`Loaded ${rawPayloads.length} concepts natively from ${selectedFile}.txt.`);
+                } else {
+                    // STAGE 1 & 2: Concepts + Draft Wrapping
+                    setAutoProgress(10, 'Stage 1: Pinging Gemini for core concepts...');
+                    const basePrompt = document.getElementById('base-prompt').value;
+                    const draftTemplate = document.getElementById('draft-wrapper-prompt').value;
+                    const character = document.getElementById('character').value;
+                    const autoNotesElement = document.getElementById('auto-notes');
+                    const notes = autoNotesElement ? autoNotesElement.value.trim() : '';
+
+                    let finalPrompt = basePrompt
+                        .replace(/{numIdeas}/g, numPages)
+                        .replace(/{character}/g, character)
+                        .replace(/{theme}/g, rawTheme);
+                        
+                    if (finalPrompt.includes('{notes}')) {
+                        finalPrompt = finalPrompt.replace(/{notes}/g, notes);
+                    } else if (notes) {
+                        finalPrompt += `\n\nNotes: ${notes}`;
+                    }
+                    
+                    const promptRes = await fetch('http://localhost:3000/api/prompts', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ promptText: finalPrompt, title: theme, draftTemplate, theme: rawTheme, numIdeas: numPages })
+                    });
+                    
+                    if (!promptRes.ok) throw new Error("Stage 1 execution halted.");
+                    const promptData = await promptRes.json();
+                    
+                    rawPayloads = promptData.result.split('---').map(s => s.trim()).filter(s => s.length > 5);
+                    rawIdeas = promptData.rawIdeas || [];
                 }
-                
-                const promptRes = await fetch('http://localhost:3000/api/prompts', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ promptText: finalPrompt, title: theme, draftTemplate, theme: rawTheme, numIdeas: numPages })
-                });
-                
-                if (!promptRes.ok) throw new Error("Stage 1 execution halted.");
-                const promptData = await promptRes.json();
-                
-                const rawPayloads = promptData.result.split('---').map(s => s.trim()).filter(s => s.length > 5);
-                const rawIdeas = promptData.rawIdeas || [];
+
                 if (rawPayloads.length === 0) throw new Error("Gemini returned zero parsable concepts.");
                 
-                // LOOP STAGES 2-5 FOR EACH INDIVIDUAL CONCEPT
-                for (let i = 0; i < rawPayloads.length; i++) {
-                    const conceptWrapper = rawPayloads[i];
-                    const conceptSentence = rawIdeas[i] || "Concept parsed explicitly natively via JSON mapping array.";
-                    const pageNum = i + 1;
-                    const totalPages = rawPayloads.length;
-                    const logPrefix = `[Page ${pageNum}/${totalPages}] `;
-                    
-                    try {
-                        setAutoProgress(15 + (80 * (i/totalPages)), logPrefix + 'Initiating pipeline sequentially...');
+                // LOOP STAGES 2-5 IN CONCURRENT BATCHES
+                const numVariations = parseInt(document.getElementById('auto-variations').value) || 1;
+                const batchSize = parseInt(document.getElementById('auto-batch').value) || 2; // Batches of N concepts natively generating simultaneously
 
-                        // Route concept directly into draft templating storage organically
-                        await fetch('http://localhost:3000/api/draft-prompts-file', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ content: conceptWrapper })
-                        });
-                        
-                        // STAGE 2: Draft Image Build
-                        setAutoProgress(15 + (80 * (i/totalPages)) + 2, logPrefix + 'Stage 2: Translating concept into Draft geometry...');
-                        await executeStageWithRetry(logPrefix, 'Stage 2: Translating concept into Draft geometry', () => 
-                            fetch('http://localhost:3000/api/drafts', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ imageCount: 1, theme: theme, loopIndex: pageNum })
-                            })
-                        );
+                for (let i = 0; i < rawPayloads.length; i += batchSize) {
+                    const batchPayloads = rawPayloads.slice(i, i + batchSize);
+                    const tasks = batchPayloads.map((conceptWrapper, idx) => ({
+                        globalIndex: i + idx,
+                        pageNum: i + idx + 1,
+                        conceptSentence: rawIdeas[i + idx] || "Concept parsed explicitly natively via JSON mapping array.",
+                        conceptWrapper,
+                        logPrefix: `[Page ${i + idx + 1}/${rawPayloads.length}] `,
+                        valid: true,
+                        latestDraft: null,
+                        visionPromptText: null
+                    }));
 
-                        // FETCH Latest Draft
-                        setAutoProgress(15 + (80 * (i/totalPages)) + 10, logPrefix + 'Stage 3: Extracting Draft buffer bytes natively...');
-                        const draftCheckRes = await fetch(`http://localhost:3000/api/draft-downloads?theme=${encodeURIComponent(theme)}&_t=${Date.now()}`);
-                        const draftData = await draftCheckRes.json();
-                        if (!draftData.images || draftData.images.length === 0) throw new Error("No draft images were extracted from network!");
-                        
-                        // Explicitly dynamically bind the latest draft matching our native filesystem loop renaming natively OR fallback to the last fetched node sequentially
-                        const latestDraft = draftData.images.find(f => f.startsWith(`${pageNum}.`)) || draftData.images[draftData.images.length - 1];
-
-                        // STAGE 4: Gemini Vision Prompt Reverse-Engineering
-                        setAutoProgress(15 + (80 * (i/totalPages)) + 15, logPrefix + 'Stage 4: Reverse-Engineering Draft identically into Line Art prompt vector...');
-                        const autoVisionCharStr = document.getElementById('auto-vision-character').value || 'A cute anthropomorphic dog';
-                        const baseVisionText = document.getElementById('vision-prompt-text').value;
-                        let visionPromptText = baseVisionText.replace(/\[character\]/gi, autoVisionCharStr);
-
-                        if (visionPromptText.includes('[concept]')) {
-                            visionPromptText = visionPromptText.replace(/\[concept\]/gi, conceptSentence);
-                        } else if (visionPromptText.includes('Prompt concept sentence:')) {
-                            visionPromptText = visionPromptText.replace('Prompt concept sentence:', `Prompt concept sentence: ${conceptSentence}`);
-                        } else if (visionPromptText.includes('Image theme:')) {
-                            visionPromptText = visionPromptText.replace('Image theme:', `Image theme: ${conceptSentence}`);
-                        } else {
-                            visionPromptText += `\n\nPrompt concept sentence: ${conceptSentence}`;
-                        }
-
-                        const visionRes = await executeStageWithRetry(logPrefix, 'Stage 4: Reverse-Engineering Draft', () => 
-                            fetch('http://localhost:3000/api/vision-prompt', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ selectedImages: [latestDraft], promptText: visionPromptText, overwrite: true, theme: theme })
-                            })
-                        );
-                        
-                        const visionResJson = await visionRes.json();
-                        const finalizedVisionPrompt = visionResJson.result;
-
-                        // STAGE 5: Final Line Art Renderer
-                        setAutoProgress(15 + (80 * (i/totalPages)) + 30, logPrefix + 'Stage 5: Executing Master Line Art renderer pipeline...');
-                        const numVariations = parseInt(document.getElementById('auto-variations').value) || 1;
-                        await executeStageWithRetry(logPrefix, 'Stage 5: Executing Master Line Art renderer pipeline', () => 
-                            fetch('http://localhost:3000/api/images', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ imageCount: numVariations, type: 'lineart', theme: theme, loopIndex: pageNum })
-                            })
-                        );
-
-                    // Loop cycle completion modular card dump
-                    const finalCheckRes = await fetch(`http://localhost:3000/api/lineart-downloads?theme=${encodeURIComponent(theme)}&_t=${Date.now()}`);
-                    const finalData = await finalCheckRes.json();
-                    
-                    if (finalData.images && finalData.images.length > 0) {
-                        
-                        const activeLineArts = finalData.images.filter(img => img.startsWith(`${pageNum}.`) || img.startsWith(`${pageNum}_var`));
-                        
+                    // STAGE 2: Draft Image Build
+                    await Promise.all(tasks.map(async (task, idx) => {
+                        if (!task.valid) return;
                         try {
-                            await fetch('http://localhost:3000/api/save-metadata', {
-                                method: 'POST',
-                                headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify({
-                                    theme: theme,
-                                    draftImage: latestDraft,
-                                    prompt: finalizedVisionPrompt,
-                                    lineArtImages: activeLineArts
+                            if (idx > 0) await new Promise(r => setTimeout(r, 2500 * idx));
+                            setAutoProgress(15 + (80 * (task.globalIndex/rawPayloads.length)) + 2, task.logPrefix + 'Stage 2: Translating concept into Draft...');
+                            await executeStageWithRetry(task.logPrefix, 'Stage 2: Translating concept into Draft geometry', () => 
+                                fetch('http://localhost:3000/api/drafts', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ imageCount: 1, theme: theme, loopIndex: task.pageNum, promptText: task.conceptWrapper })
                                 })
-                            });
-                        } catch(e) {}
-                        
-                        const cardContainer = document.getElementById('auto-final-gallery');
-                        
-                        attachModularMasterCard({
-                            draftImage: latestDraft,
-                            prompt: finalizedVisionPrompt,
-                            lineArtImages: activeLineArts
-                        }, theme, pageNum, cardContainer);
-                        
+                            );
+                        } catch (loopErr) {
+                            if (window.isAutoPilotCancelled) throw loopErr;
+                            console.error('Fatal loop failure for concept ' + task.pageNum, loopErr);
+                            setAutoProgress(null, task.logPrefix + `Fatal Failure: ${loopErr.message}. Skipping natively...`);
+                            task.valid = false;
+                        }
+                    }));
+
+                    // FETCH Latest Drafts
+                    for (const task of tasks) {
+                        if (!task.valid) continue;
+                        try {
+                            setAutoProgress(15 + (80 * (task.globalIndex/rawPayloads.length)) + 10, task.logPrefix + 'Stage 3: Extracting Draft... ');
+                            const draftCheckRes = await fetch(`http://localhost:3000/api/draft-downloads?theme=${encodeURIComponent(theme)}&_t=${Date.now()}`);
+                            const draftData = await draftCheckRes.json();
+                            if (!draftData.images || draftData.images.length === 0) throw new Error("No draft images were extracted from network!");
+                            
+                            task.latestDraft = draftData.images.find(f => f.startsWith(`${task.pageNum}.`)) || draftData.images[draftData.images.length - 1];
+                        } catch (loopErr) {
+                            if (window.isAutoPilotCancelled) throw loopErr;
+                            task.valid = false;
+                        }
                     }
 
-                    // Master Display Card Rendered Natively by External Module
-                    
-                    } catch (loopErr) {
-                        if (window.isAutoPilotCancelled) throw loopErr; // Escalate explicitly cancelled pipelines natively bypassing page skipping
-                        console.error('Fatal loop failure for concept ' + pageNum, loopErr);
-                        setAutoProgress(null, logPrefix + `Fatal Failure: ${loopErr.message}. Skipping to next page natively...`);
-                        await new Promise(r => setTimeout(r, 4500)); // Wait exactly 4.5 seconds to let user read the warning before natively skipping to next loop!
-                        continue; 
+                    // STAGE 4: Gemini Vision Prompt Reverse-Engineering
+                    await Promise.all(tasks.map(async (task, idx) => {
+                        if (!task.valid) return;
+                        try {
+                            if (idx > 0) await new Promise(r => setTimeout(r, 2500 * idx));
+                            setAutoProgress(15 + (80 * (task.globalIndex/rawPayloads.length)) + 15, task.logPrefix + 'Stage 4: Reverse-Engineering Draft...');
+                            const autoVisionCharStr = document.getElementById('auto-vision-character').value || 'A cute anthropomorphic dog';
+                            const baseVisionText = document.getElementById('vision-prompt-text').value;
+                            let visionPromptText = baseVisionText.replace(/\[character\]/gi, autoVisionCharStr);
+
+                            if (visionPromptText.includes('[concept]')) {
+                                visionPromptText = visionPromptText.replace(/\[concept\]/gi, task.conceptSentence);
+                            } else if (visionPromptText.includes('Prompt concept sentence:')) {
+                                visionPromptText = visionPromptText.replace('Prompt concept sentence:', `Prompt concept sentence: ${task.conceptSentence}`);
+                            } else if (visionPromptText.includes('Image theme:')) {
+                                visionPromptText = visionPromptText.replace('Image theme:', `Image theme: ${task.conceptSentence}`);
+                            } else {
+                                visionPromptText += `\n\nPrompt concept sentence: ${task.conceptSentence}`;
+                            }
+
+                            const visionRes = await executeStageWithRetry(task.logPrefix, 'Stage 4: Reverse-Engineering Draft', () => 
+                                fetch('http://localhost:3000/api/vision-prompt', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ selectedImages: [task.latestDraft], promptText: visionPromptText, overwrite: true, theme: theme, skipSave: true })
+                                })
+                            );
+                            
+                            const visionResJson = await visionRes.json();
+                            task.visionPromptText = visionResJson.result;
+                        } catch (loopErr) {
+                            if (window.isAutoPilotCancelled) throw loopErr;
+                            task.valid = false;
+                        }
+                    }));
+
+                    // STAGE 5: Final Line Art Renderer (Sequenced explicitly 1 by 1)
+                    for (const task of tasks) {
+                        if (!task.valid) continue;
+                        try {
+                            setAutoProgress(15 + (80 * (task.globalIndex/rawPayloads.length)) + 30, task.logPrefix + 'Stage 5: Rendering Master Line Art...');
+                            await executeStageWithRetry(task.logPrefix, 'Stage 5: Executing Master Line Art renderer pipeline', () => 
+                                fetch('http://localhost:3000/api/images', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ imageCount: numVariations, type: 'lineart', theme: theme, loopIndex: task.pageNum, promptText: task.visionPromptText })
+                                })
+                            );
+
+                            const finalCheckRes = await fetch(`http://localhost:3000/api/lineart-downloads?theme=${encodeURIComponent(theme)}&_t=${Date.now()}`);
+                            const finalData = await finalCheckRes.json();
+                            
+                            if (finalData.images && finalData.images.length > 0) {
+                                const activeLineArts = finalData.images.filter(img => img.startsWith(`${task.pageNum}.`) || img.startsWith(`${task.pageNum}_var`));
+                                
+                                try {
+                                    await fetch('http://localhost:3000/api/save-metadata', {
+                                        method: 'POST',
+                                        headers: {'Content-Type': 'application/json'},
+                                        body: JSON.stringify({ theme: theme, draftImage: task.latestDraft, prompt: task.visionPromptText, lineArtImages: activeLineArts })
+                                    });
+                                } catch(e) {}
+                                
+                                const cardContainer = document.getElementById('auto-final-gallery');
+                                attachModularMasterCard({ draftImage: task.latestDraft, prompt: task.visionPromptText, lineArtImages: activeLineArts }, theme, task.pageNum, cardContainer);
+                            }
+                        } catch (loopErr) {
+                            if (window.isAutoPilotCancelled) throw loopErr;
+                        }
                     }
                 }
                 

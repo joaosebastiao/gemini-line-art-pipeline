@@ -52,9 +52,9 @@ app.use('/draft_downloads', express.static(path.join(__dirname, 'draft_downloads
 app.use('/line_art', express.static(path.join(__dirname, 'line art')));
 
 app.post('/api/images', async (req, res) => {
-    const { imageCount, type, theme, loopIndex } = req.body;
+    const { imageCount, type, theme, loopIndex, promptText, refImage } = req.body;
     try {
-        await runImageGeneration(imageCount, type || 'lineart', theme, loopIndex);
+        await runImageGeneration(imageCount, type || 'lineart', theme, loopIndex, promptText, refImage);
         res.json({ message: `Successfully completed line art phase with Total Images = ${imageCount}` });
     } catch (err) {
         console.error(err);
@@ -63,9 +63,9 @@ app.post('/api/images', async (req, res) => {
 });
 
 app.post('/api/drafts', async (req, res) => {
-    const { imageCount, theme, loopIndex } = req.body;
+    const { imageCount, theme, loopIndex, promptText } = req.body;
     try {
-        await runImageGeneration(imageCount, 'draft', theme, loopIndex);
+        await runImageGeneration(imageCount, 'draft', theme, loopIndex, promptText);
         res.json({ message: `Successfully completed drafts phase with Total Images = ${imageCount}` });
     } catch (err) {
         console.error(err);
@@ -137,9 +137,9 @@ app.get('/api/draft-downloads', (req, res) => {
 });
 
 app.post('/api/vision-prompt', async (req, res) => {
-    const { selectedImages, promptText, overwrite, theme } = req.body;
+    const { selectedImages, promptText, overwrite, theme, skipSave } = req.body;
     try {
-        const result = await runVisionPromptGeneration(selectedImages, promptText, overwrite, theme);
+        const result = await runVisionPromptGeneration(selectedImages, promptText, overwrite, theme, skipSave);
         res.json({ status: 'Successfully scraped line art prompt!', result });
     } catch (err) {
         console.error(err);
@@ -221,8 +221,31 @@ app.post('/api/prompts-file', (req, res) => {
     }
 });
 
+app.get('/api/generated-prompts-list', (req, res) => {
+    try {
+        const archPath = path.join(__dirname, 'generated_prompts');
+        if (!fs.existsSync(archPath)) return res.json({ files: [] });
+        const files = fs.readdirSync(archPath)
+            .filter(f => f.endsWith('.txt'))
+            .sort((a,b) => fs.statSync(path.join(archPath, b)).mtimeMs - fs.statSync(path.join(archPath, a)).mtimeMs)
+            .map(f => f.replace('.txt', ''));
+        res.json({ files });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/api/draft-prompts-file', (req, res) => {
     try {
+        const fileParam = req.query.file;
+        if (fileParam) {
+            const safeTheme = fileParam.replace(/[^a-z0-9 _-]/gi, '_').trim();
+            const archPath = path.join(__dirname, 'generated_prompts', `${safeTheme}.txt`);
+            if (fs.existsSync(archPath)) {
+                return res.json({ content: fs.readFileSync(archPath, 'utf-8') });
+            }
+        }
+        
         if (!fs.existsSync(DRAFT_PROMPTS_FILE)) {
             res.json({ content: '' });
         } else {
@@ -370,19 +393,20 @@ app.get('/api/get-unique-theme', (req, res) => {
     base = base.replace(/[^a-zA-Z0-9 _-]/g, '').trim();
 
     const lineArtDir = path.join(__dirname, 'line art');
+    const draftsDir = path.join(__dirname, 'draft_downloads');
     if (!fs.existsSync(lineArtDir)) fs.mkdirSync(lineArtDir, { recursive: true });
+    if (!fs.existsSync(draftsDir)) fs.mkdirSync(draftsDir, { recursive: true });
 
     let attempt = 1;
     let current = base;
-    while (fs.existsSync(path.join(lineArtDir, current))) {
+    while (fs.existsSync(path.join(lineArtDir, current)) || fs.existsSync(path.join(draftsDir, current))) {
         current = `${base} ${attempt}`;
         attempt++;
     }
     
     // PREEMPTIVELY RESERVE OS DIRECTORIES TO PREVENT ITERATION OVERLAPS
     fs.mkdirSync(path.join(lineArtDir, current), { recursive: true });
-    const draftDir = path.join(__dirname, 'draft_downloads', current);
-    fs.mkdirSync(draftDir, { recursive: true });
+    fs.mkdirSync(path.join(draftsDir, current), { recursive: true });
 
     res.json({ theme: current });
 });

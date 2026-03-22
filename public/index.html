@@ -58,14 +58,23 @@
                             <label for="auto-variations">Line Art Variations (Tabs)</label>
                             <input type="number" id="auto-variations" value="1" min="1" max="10" style="width: 100%; font-size: 16px; padding: 14px;">
                         </div>
+                        <div class="setting-group" style="margin-bottom: 24px;">
+                            <label for="auto-batch">Concurrent Concepts (N)</label>
+                            <input type="number" id="auto-batch" value="2" min="1" max="10" style="width: 100%; font-size: 16px; padding: 14px;">
+                        </div>
                         <div class="setting-group full-width" style="margin-bottom: 24px;">
                             <label for="auto-vision-character">Line Art Subject Character</label>
                             <input type="text" id="auto-vision-character" placeholder="e.g. A cute anthropomorphic dog" style="width: 100%; font-size: 16px; padding: 14px;">
                         </div>
-                        <div class="setting-group full-width" style="margin-bottom: 24px;">
-                            <label for="auto-notes">Additional Concept Notes</label>
-                            <input type="text" id="auto-notes" placeholder="e.g. Make it spooky, or focus on action scenes" style="width: 100%; font-size: 16px; padding: 14px;">
+                        <div class="setting-group full-width" style="margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between;">
+                            <label for="auto-concept-file" style="margin-bottom: 0;">Concept Load Behavior</label>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <select id="auto-concept-file" class="input-field" onchange="if(this.value) { const t = document.getElementById('auto-theme'); if(!t.value) t.value = this.value.replace(/_[0-9]+$/, '').replace(/_/g, ' '); }" style="min-width: 250px; background: #0f172a; padding: 10px 14px; font-size: 14px; border-radius: 6px; cursor: pointer;">
+                                    <option value="">Generate New Concepts...</option>
+                                </select>
+                            </div>
                         </div>
+                        <input type="text" id="auto-notes" placeholder="e.g. Make it spooky, or focus on action scenes" style="width: 100%; font-size: 16px; padding: 14px; margin-bottom: 24px; box-sizing: border-box;">
                     </div>
 
                     <div style="display: flex; gap: 16px;">

@@ -77,7 +77,7 @@ header p { color: var(--text-secondary); line-height: 1.5; }
 .setting-group label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--text-secondary); }
 .help-text { font-size: 13px; color: var(--text-secondary); margin-top: 6px; }
 
-input[type="text"], input[type="number"] {
+input[type="text"], input[type="number"], select {
     width: 100%;
     background: #0f172a;
     border: 1px solid var(--border);
@@ -88,7 +88,12 @@ input[type="text"], input[type="number"] {
     transition: border 0.2s;
 }
 
-input:focus { outline: none; border-color: var(--accent); }
+select option {
+    background: #1e293b;
+    color: white;
+}
+
+input:focus, select:focus { outline: none; border-color: var(--accent); }
 
 .form-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 24px; }
 .full-width { grid-column: 1 / -1; }

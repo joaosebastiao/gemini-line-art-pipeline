@@ -7,7 +7,7 @@ const USER_DATA_DIR = './user_data';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-export async function runVisionPromptGeneration(selectedImages, promptText, overwrite = false, theme = '') {
+export async function runVisionPromptGeneration(selectedImages, promptText, overwrite = false, theme = '', skipSave = false) {
     console.log(`Starting Vision Prompt Generation Flow... [Overwrite: ${overwrite}]`);
 
     let browser;
@@ -223,16 +223,18 @@ export async function runVisionPromptGeneration(selectedImages, promptText, over
         if (finalWriteText.includes(targetPhrase)) {
             console.log('✅ Generated prompt includes the required art style phrase.');
             
-            // Append to Line Art prompts.txt natively
-            const promptsFile = path.resolve('./prompts.txt');
-            if (overwrite) {
-                fs.writeFileSync(promptsFile, finalWriteText);
-            } else {
-                try {
-                    const existing = fs.readFileSync(promptsFile, 'utf-8');
-                    fs.writeFileSync(promptsFile, existing + (existing.trim().length > 0 ? '\n\n---\n\n' : '') + finalWriteText);
-                } catch(e) {
+            if (!skipSave) {
+                // Append to Line Art prompts.txt natively
+                const promptsFile = path.resolve('./prompts.txt');
+                if (overwrite) {
                     fs.writeFileSync(promptsFile, finalWriteText);
+                } else {
+                    try {
+                        const existing = fs.readFileSync(promptsFile, 'utf-8');
+                        fs.writeFileSync(promptsFile, existing + (existing.trim().length > 0 ? '\n\n---\n\n' : '') + finalWriteText);
+                    } catch(e) {
+                        fs.writeFileSync(promptsFile, finalWriteText);
+                    }
                 }
             }
         
