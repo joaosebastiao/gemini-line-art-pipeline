@@ -352,25 +352,63 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
             await sleep(40000);
             console.log('Base rendering time elapsed! Polling for complete stabilization...');
 
-            // 4. Wait for generation to completely finish
-            let lastHTML = '';
-            let stableCount = 0;
-            while (true) {
-                await sleep(1000); // Check natively every 1000ms natively cutting ping latency in half
-                let currentHTML = lastHTML;
-                try {
-                    currentHTML = await page.evaluate(() => document.body ? document.body.innerHTML.length : 0);
-                } catch (err) {}
-                if (currentHTML === lastHTML && currentHTML > 0) {
-                    stableCount++;
-                    if (stableCount >= 2) { // Total 2s stability perfectly confirming output safely
-                        console.log('Generation perfectly complete internally natively! Moving instantly...');
-                        break;
+            // 4. Wait for generation to completely finish AS FAST AS POSSIBLE
+            console.log(`Aggressively polling for AI images to extract them natively...`);
+            let finalImageCount = 0;
+            let waitTicks = 0;
+            
+            // Wait up to ~60s natively in 1s polling intervals for maximum speed
+            while (waitTicks < 60) {
+                finalImageCount = await page.evaluate(async (refCount) => {
+                    function findAllShadow(selector, root = document) {
+                        let found = Array.from(root.querySelectorAll(selector));
+                        for (const el of root.querySelectorAll('*')) {
+                            if (el.shadowRoot) found = found.concat(findAllShadow(selector, el.shadowRoot));
+                        }
+                        return found;
                     }
-                } else {
-                    lastHTML = currentHTML;
-                    stableCount = 0;
+                    
+                    const allImages = findAllShadow('img[src*="googleusercontent.com/gg-dl/"], img.image, img[alt*="AI generated"]');
+                    const untaggedImages = allImages.filter(img => 
+                        !img.dataset.downloaded && 
+                        (typeof img.className === 'string' && !img.className.includes('user-icon'))
+                    );
+                    return untaggedImages.length;
+                }, referenceImages.length);
+                
+                if (finalImageCount > 0) {
+                    // Images natively detected! Provide Google 2 seconds to finish injecting any remaining sibling images synchronously into the grid
+                    console.log(`Discovered ${finalImageCount} images! Delaying 2s for complete batch grid delivery...`);
+                    await sleep(2000);
+                    
+                    // Final secure evaluation of the complete batch
+                    finalImageCount = await page.evaluate(async (refCount) => {
+                        function findAllShadow(selector, root = document) {
+                            let found = Array.from(root.querySelectorAll(selector));
+                            for (const el of root.querySelectorAll('*')) {
+                                if (el.shadowRoot) found = found.concat(findAllShadow(selector, el.shadowRoot));
+                            }
+                            return found;
+                        }
+                        const allImages = findAllShadow('img[src*="googleusercontent.com/gg-dl/"], img.image, img[alt*="AI generated"]');
+                        const untaggedImages = allImages.filter(img => 
+                            !img.dataset.downloaded && 
+                            (typeof img.className === 'string' && !img.className.includes('user-icon'))
+                        );
+                        return untaggedImages.length;
+                    }, referenceImages.length);
+                    
+                    console.log(`Fast Extraction Triggered! Total final batch images: ${finalImageCount}`);
+                    break;
                 }
+                
+                waitTicks++;
+                if (waitTicks % 5 === 0) console.log(`[Fast Poll ${waitTicks}/60] Images not yet injected visually...`);
+                await sleep(1000);
+            }
+            
+            if (finalImageCount === 0) {
+                throw new Error("Zero draft images securely isolated natively! (Timed out waiting for Gemini to render images after 60 seconds)");
             }
 
             // 5. Download the images directly without clicking the download buttons
@@ -429,8 +467,16 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
                 }
             } else {
                 // Line Art natively clicks to trigger Google's upscaler explicitly!
-                const expectedNewDownloads = await page.evaluate(async (refCount) => {
+                console.log(`[Line Art] Initializing concurrent CDP Download Path explicitly for tabTempDownloadDir: ${tabTempDownloadDir}`);
+                // Explicitly bind the active download vector IMMEDIATELY PRIOR to clicking natively assuring Chrome routes it securely bypassing race conditions
+                const activeClient = await page.target().createCDPSession();
+                await activeClient.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: tabTempDownloadDir });
+
+                const evaluationResult = await page.evaluate(async (refCount) => {
+                    const logs = [];
+                    const log = (msg) => logs.push(`    -> [Browser] ${msg}`);
                     const sleep = ms => new Promise(r => setTimeout(r, ms));
+                    
                     function findAllShadow(selector, root = document) {
                         let found = Array.from(root.querySelectorAll(selector));
                         for (const el of root.querySelectorAll('*')) {
@@ -439,20 +485,34 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
                         return found;
                     }
                     
+                    log('Searching for AI generated images inside Document Shadow roots...');
                     const allImages = findAllShadow('img[src*="googleusercontent.com/gg-dl/"], img.image, img[alt*="AI generated"]');
+                    log(`Found ${allImages.length} total images matching base selector.`);
+                    
                     const untaggedImages = allImages.filter(img => 
                         !img.dataset.downloaded && 
                         (typeof img.className === 'string' && !img.className.includes('user-icon'))
                     );
+                    log(`Filtered out duplicates and user icons natively. Remaining untagged generated images: ${untaggedImages.length}`);
 
                     let clicks = 0;
                     for (let img of untaggedImages) {
-                        try { img.scrollIntoView({ behavior: 'instant', block: 'center' }); } catch(err){}
+                        log(`Processing image node: src=(...${img.src ? img.src.substring(img.src.length - 20) : 'none'})`);
+                        try { 
+                            img.scrollIntoView({ behavior: 'instant', block: 'center' }); 
+                            log('Scrolled image into view.');
+                        } catch(err){
+                            log('Failed to scroll image into view: ' + err.message);
+                        }
+                        
                         try {
                             const hoverEvent = new MouseEvent('mouseover', { view: window, bubbles: true, cancelable: true });
                             img.dispatchEvent(hoverEvent);
                             if (img.parentElement) img.parentElement.dispatchEvent(hoverEvent);
-                        } catch(err) {}
+                            log('Dispatched synthetic mouseover events successfully.');
+                        } catch(err) {
+                            log('Failed to dispatch hover events: ' + err.message);
+                        }
 
                         await sleep(350);
 
@@ -463,6 +523,7 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
                             let possibleIcons = findAllShadow('[data-mat-icon-name*="ownload" i], [aria-label*="ownload" i], [mattooltip*="ownload" i], [data-test-id*="ownload" i]', curr);
                             if (possibleIcons.length > 0) {
                                 foundDirectBtn = possibleIcons[0].closest('button') || possibleIcons[0];
+                                log(`Found visual download button at DOM tree level +${lvl}`);
                                 break;
                             }
                             curr = curr.parentElement || (curr.getRootNode ? curr.getRootNode().host : null);
@@ -470,29 +531,55 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
 
                         if (foundDirectBtn) {
                             foundDirectBtn.click();
+                            log('Synthetically clicked the found Direct Download Button!');
                             img.dataset.downloaded = 'true';
                             clicks++;
                             await sleep(500);
                         } else {
+                            log('CRITICAL WARNING: Visual download button not found! Falling back to raw image wrapper click.');
                             // Fallback if visual button fails to manifest
                             img.click();
+                            log('Clicked the image element itself.');
+                            img.dataset.downloaded = 'true';
+                            clicks++;
+                            await sleep(500);
                         }
                     }
-                    return clicks;
+                    return { clicks, logs };
                 }, referenceImages.length);
 
-                console.log(`Successfully dispatched ${expectedNewDownloads} line art download clicks explicitly upscaling!`);
+                // Print all internal logs securely
+                evaluationResult.logs.forEach(msg => console.log(msg));
+                const expectedNewDownloads = evaluationResult.clicks;
+
+                console.log(`[Line Art] Successfully dispatched ${expectedNewDownloads} line art download clicks explicitly upscaling!`);
+                console.log(`[Line Art] Waiting securely for Chrome to buffer files into ${tabTempDownloadDir}...`);
 
                 // Wait for downloading
                 for (let w = 0; w < 30; w++) {
-                    if (!fs.existsSync(tabTempDownloadDir)) break;
-                    const files = fs.readdirSync(tabTempDownloadDir).filter(f => !f.endsWith('.crdownload') && !f.endsWith('.tmp') && f.match(/\.(jpe?g|png|gif|webp)$/i));
-                    if (files.length >= expectedNewDownloads && expectedNewDownloads > 0) break;
+                    if (!fs.existsSync(tabTempDownloadDir)) {
+                        console.log(`    -> [Wait Loop ${w}/30] tabTempDownloadDir does NOT exist yet.`);
+                        break;
+                    }
+                    const files = fs.readdirSync(tabTempDownloadDir);
+                    const completedFiles = files.filter(f => !f.endsWith('.crdownload') && !f.endsWith('.tmp') && f.match(/\.(jpe?g|png|gif|webp)$/i));
+                    
+                    if (w % 5 === 0 || completedFiles.length > 0) {
+                        let logStr = `    -> [Wait Loop ${w}/30] Found ${files.length} total files. Completed: ${completedFiles.length}/${expectedNewDownloads}`;
+                        if (files.some(f => f.endsWith('.crdownload'))) logStr += ` (Chrome is streaming .crdownload...)`;
+                        console.log(logStr);
+                    }
+
+                    if (completedFiles.length >= expectedNewDownloads && expectedNewDownloads > 0) {
+                        console.log(`    -> Loop Break: All ${expectedNewDownloads} downloads perfectly flushed!`);
+                        break;
+                    }
                     await sleep(1000);
                 }
 
                 if (fs.existsSync(tabTempDownloadDir) && expectedNewDownloads > 0) {
                     const downloadedFiles = fs.readdirSync(tabTempDownloadDir).filter(f => !f.endsWith('.crdownload') && !f.endsWith('.tmp') && f.match(/\.(jpe?g|png|gif|webp)$/i));
+                    console.log(`[Line Art] Moving ${downloadedFiles.length} final images from OS Temp Directory to secure Repo Folder:`);
                     for (let j = 0; j < downloadedFiles.length; j++) {
                         const file = downloadedFiles[j];
                         const filePath = path.join(tabTempDownloadDir, file);
@@ -513,8 +600,9 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
                             fs.copyFileSync(filePath, writePath);
                             fs.unlinkSync(filePath);
                             expectedDownloads++;
+                            console.log(`    -> Safely moved: ${name}`);
                         } catch(e) {
-                            console.error(`Failed to move file ${filePath}`, e);
+                            console.error(`    -> [ERROR] Failed to move file ${filePath}`, e);
                         }
                     }
                 }
