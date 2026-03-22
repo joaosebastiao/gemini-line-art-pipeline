@@ -45,14 +45,33 @@
                 </header>
                 
                 <div class="card">
-                    <div class="setting-group" style="margin-bottom: 24px;">
-                        <label for="auto-theme">Target Subject Theme</label>
-                        <input type="text" id="auto-theme" placeholder="e.g. Pirates, Witches, Astronaut Dogs" style="width: 100%; font-size: 16px; padding: 14px;">
+                    <div class="form-grid">
+                        <div class="setting-group" style="margin-bottom: 24px;">
+                            <label for="auto-theme">Target Subject Theme</label>
+                            <input type="text" id="auto-theme" placeholder="e.g. Pirates, Witches, Astronaut Dogs" style="width: 100%; font-size: 16px; padding: 14px;">
+                        </div>
+                        <div class="setting-group" style="margin-bottom: 24px;">
+                            <label for="auto-pages">Pages to Generate</label>
+                            <input type="number" id="auto-pages" value="1" min="1" max="25" style="width: 100%; font-size: 16px; padding: 14px;">
+                        </div>
+                        <div class="setting-group full-width" style="margin-bottom: 24px;">
+                            <label for="auto-vision-character">Line Art Subject Character</label>
+                            <input type="text" id="auto-vision-character" placeholder="e.g. A cute anthropomorphic dog" style="width: 100%; font-size: 16px; padding: 14px;">
+                        </div>
+                        <div class="setting-group full-width" style="margin-bottom: 24px;">
+                            <label for="auto-notes">Additional Concept Notes</label>
+                            <input type="text" id="auto-notes" placeholder="e.g. Make it spooky, or focus on action scenes" style="width: 100%; font-size: 16px; padding: 14px;">
+                        </div>
                     </div>
 
-                    <button class="primary-btn" id="start-auto-btn" style="height: 50px; font-size: 16px;">
-                        Launch Auto-Pilot Pipeline
-                    </button>
+                    <div style="display: flex; gap: 16px;">
+                        <button class="primary-btn" id="start-auto-btn" style="flex: 1; height: 50px; font-size: 16px;">
+                            Launch Auto-Pilot Pipeline
+                        </button>
+                        <button class="secondary-btn" id="cancel-auto-btn" style="width: 120px; height: 50px; font-size: 16px; background: #ef4444; color: white; border: none; display: none; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s;">
+                            Cancel
+                        </button>
+                    </div>
 
                     <div style="margin-top: 32px; display: none;" id="auto-progress-container">
                         <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
@@ -64,6 +83,17 @@
                         </div>
                         
                         <div id="auto-final-gallery" style="margin-top: 24px; display: flex; flex-wrap: wrap; gap: 16px;"></div>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-top: 24px;">
+                    <h2>Load Previous Project Flow</h2>
+                    <p style="color: var(--text-secondary); margin-bottom: 16px; font-size: 14px;">Restore an identical sequence organically from offline JSON arrays.</p>
+                    <div style="display: flex; gap: 12px;">
+                        <select id="history-themes" class="input-field" style="flex: 1; min-height: 48px; background: #0f172a;">
+                            <option value="">Fetching local directories...</option>
+                        </select>
+                        <button class="primary-btn" id="load-history-btn" style="min-width: 180px; font-weight: 600;">Load Native Theme</button>
                     </div>
                 </div>
             </section>
@@ -87,7 +117,7 @@
                     <div class="setting-group" style="margin-bottom: 24px;">
                         <label for="vision-prompt-text">Instructions Array<span style="float: right; color: var(--success); display: none;" id="save-vision-status">Saved!</span></label>
                         <textarea id="vision-prompt-text" rows="6" style="width: 100%; border: 1px solid var(--border); border-radius: 8px; background: #0f172a; color: white; padding: 12px; font-family: 'Consolas', monospace; resize: vertical; line-height: 1.5; font-size: 14px; transition: border 0.2s;" placeholder="Loading template..."></textarea>
-                        <p class="help-text">Determine the core instructions Gemini will follow whenever reverse-engineering drafts into final text.</p>
+                        <p class="help-text">Determine the core instructions Gemini will follow whenever reverse-engineering drafts into final text. Use <code>[character]</code> and <code>[concept]</code> to dynamically inject variables inherently from the native loop sequence.</p>
                         <button class="secondary-btn" id="save-vision-btn" style="margin-top: 12px; padding: 10px 16px; background: #334155; color: white; border: none; border-radius: 6px; cursor: pointer; transition: background 0.2s; font-size: 13px; font-weight: 600;">💾 Save Vision Instructions Array</button>
                     </div>
 
@@ -196,7 +226,7 @@
                     <div class="setting-group" style="margin-bottom: 24px;">
                         <label for="base-prompt">Stage 1: Concept Extraction Template<span style="float: right; color: var(--success); display: none;" id="save-base-status">Saved!</span></label>
                         <textarea id="base-prompt" rows="5" style="width: 100%; border: 1px solid var(--border); border-radius: 8px; background: #0f172a; color: white; padding: 12px; font-family: 'Consolas', monospace; resize: vertical; line-height: 1.5; font-size: 14px; transition: border 0.2s;" placeholder="Loading concept template..."></textarea>
-                        <p class="help-text">Use <code>{numIdeas}</code>, <code>{character}</code>, and <code>{theme}</code> to dynamically inject variables.</p>
+                        <p class="help-text">Use <code>{numIdeas}</code>, <code>{character}</code>, <code>{theme}</code>, and <code>{notes}</code> to dynamically inject variables.</p>
                         <button class="secondary-btn" id="save-base-btn" style="margin-top: 12px; padding: 10px 16px; background: #334155; color: white; border: none; border-radius: 6px; cursor: pointer; transition: background 0.2s; font-size: 13px; font-weight: 600;">💾 Save Stage 1 Template</button>
                     </div>
 
@@ -213,12 +243,22 @@
                             <input type="number" id="num-ideas" value="3" min="1">
                         </div>
                         <div class="setting-group">
-                            <label for="character">Character</label>
-                            <input type="text" id="character" value="A cute anthropomorphic dog">
+                            <label for="character">Character<span style="float: right; color: var(--success); display: none; font-size: 12px; font-weight: normal;" id="save-character-status">Saved!</span></label>
+                            <input type="text" id="character" value="A cute anthropomorphic dog" style="margin-bottom: 8px;">
+                            <button class="secondary-btn" id="save-character-btn" style="padding: 6px 12px; background: #334155; color: white; border: none; border-radius: 6px; cursor: pointer; transition: background 0.2s; font-size: 12px; font-weight: 600;">💾 Save Character</button>
+                        </div>
+                        <div class="setting-group full-width">
+                            <label for="vision-character">Vision Subject Character<span style="float: right; color: var(--success); display: none; font-size: 12px; font-weight: normal;" id="save-vision-char-status">Saved!</span></label>
+                            <input type="text" id="vision-character" value="A cute anthropomorphic dog" style="margin-bottom: 8px;">
+                            <button class="secondary-btn" id="save-vision-char-btn" style="padding: 6px 12px; background: #334155; color: white; border: none; border-radius: 6px; cursor: pointer; transition: background 0.2s; font-size: 12px; font-weight: 600;">💾 Save Vision Character</button>
                         </div>
                         <div class="setting-group full-width">
                             <label for="theme">Theme</label>
                             <input type="text" id="theme" value="kpop">
+                        </div>
+                        <div class="setting-group full-width">
+                            <label for="concept-notes">Additional Notes</label>
+                            <input type="text" id="concept-notes" placeholder="e.g. Spooky, detailed, etc.">
                         </div>
                     </div>
 

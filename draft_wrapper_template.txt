@@ -1,6 +1,6 @@
 Aspect ratio: 1:1
 
-Style: Exactly the same as the reference images. Make everything slightly oversized, with no small details. Everything should be smooth and rounded, as if every element of the illustration is cute and inflated. There are no sharp edges in any lines. Everything looks close together and crowded. The character is surrounded by lots of varied visual elements. No text in the image.
+Style: Exactly the same as the reference images. Make everything slightly oversized, with no small details. Everything should be smooth and rounded, as if every element of the illustration is cute and inflated. There are no sharp edges in any lines. Everything looks close together and crowded. The character is surrounded by 5 to 10 varied visual elements. Some in the foreground, some in the middleground, some in the background. No text in the image.
 
 Theme: {theme}.
 

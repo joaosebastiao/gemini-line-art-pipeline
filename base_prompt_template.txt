@@ -1,4 +1,14 @@
-Brainstorm {numIdeas} page ideas for a cozy coloring book. Each idea should be just one sentence, and include a setting, and a character doing an action. Be as varied as possible in your settings and actions. I'm going to use your answer as a prompt, so write three dashes --- like this between each idea. Also don't write anything before or after the ideas. Output as a code block.
+Brainstorm page ideas for a coloring book. Each idea should be just one sentence, and include a setting, and a character doing an action. 
+
+Start by brainstorming and writing {numIdeas} different settings. By settings I means different physical places that a character can be in.
+
+Then based on those places, add the character doing an action that would make sense in that place. 
+
+Then after the settting and character action, add 5 element ideas related to the theme and setting. Elements are objects/things/other characters/pets/anything visual that can be colored and adds variety to the composition.
+
+Don't use extreme adjectives like "massive". Don't describe colors. Only then you write the final list like this:
+
+Three dashes --- like this between each idea. Also don't write anything before or after the ideas. Output as a code block.
 
 For the character, always say: {character}
 

@@ -7,7 +7,7 @@ const USER_DATA_DIR = './user_data';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-export async function runVisionPromptGeneration(selectedImages, promptText, overwrite = false) {
+export async function runVisionPromptGeneration(selectedImages, promptText, overwrite = false, theme = '') {
     console.log(`Starting Vision Prompt Generation Flow... [Overwrite: ${overwrite}]`);
 
     let browser;
@@ -29,8 +29,13 @@ export async function runVisionPromptGeneration(selectedImages, promptText, over
         });
     }
 
-    const page = await browser.newPage();
-    console.log('Navigating to Gemini...');
+    const targetPhrase = "Generate an illustration in exactly the same art style as the reference illustrations";
+    let attempt = 1;
+    
+    while(true) {
+        console.log(`\n--- Vision Prompt Generation Attempt ${attempt} ---`);
+        const page = await browser.newPage();
+        console.log('Navigating to Gemini...');
     await page.goto('https://gemini.google.com/app', { waitUntil: 'networkidle2' });
 
     const inputSelector = 'rich-textarea p, textarea, [contenteditable="true"]';
@@ -51,7 +56,8 @@ export async function runVisionPromptGeneration(selectedImages, promptText, over
     // Paste Draft Images
     if (selectedImages && selectedImages.length > 0) {
         console.log(`Pasting ${selectedImages.length} draft images...`);
-        const DRAFTS_DIR = path.resolve('./draft_downloads');
+        const safeTheme = theme ? theme.replace(/[^a-z0-9 _-]/gi, '_').trim() : '';
+        const DRAFTS_DIR = safeTheme ? path.resolve('./draft_downloads', safeTheme) : path.resolve('./draft_downloads');
         const imagesAsBase64 = selectedImages.map(imgName => {
             const resolvedPath = path.resolve(DRAFTS_DIR, imgName);
             const ext = path.extname(resolvedPath).toLowerCase();
@@ -74,7 +80,8 @@ export async function runVisionPromptGeneration(selectedImages, promptText, over
             }
         }, imagesAsBase64, inputSelector);
         
-        await sleep(1000);
+        console.log('Draft images placed. Waiting exactly 5.5 seconds for Gemini to register the visual buffers natively...');
+        await sleep(5500);
     }
 
     // Insert Text
@@ -88,11 +95,39 @@ export async function runVisionPromptGeneration(selectedImages, promptText, over
     }, promptText, inputSelector);
     await sleep(1000);
 
+    console.log('Capturing state before generation...');
+    let previousLastMessageText = null;
+    try {
+        const shadowTexts = await page.$$eval('pierce/message-content', els => els.map(e => e.textContent.trim()));
+        if (shadowTexts && shadowTexts.length > 0) {
+            previousLastMessageText = shadowTexts[shadowTexts.length - 1];
+        }
+    } catch(e) {}
+    
+    if (!previousLastMessageText) {
+        previousLastMessageText = await page.evaluate(() => {
+            const selectors = ['model-message', 'message-content', '[data-message-author="role_model"]', '.model-response-text', '.message-content', 'response-body', '#chat-history .response-container', '.query-response'];
+            let foundElements = [];
+            for (const sel of selectors) {
+                const els = document.querySelectorAll(sel);
+                if (els.length > 0) {
+                    foundElements = Array.from(els);
+                    break;
+                }
+            }
+            if (foundElements.length === 0) return '';
+            const lastMessage = foundElements[foundElements.length - 1];
+            const contentBlock = lastMessage.querySelector('message-content') || lastMessage;
+            return (contentBlock.innerText || contentBlock.textContent || '').trim();
+        });
+    }
+
     // Submit payload
     let submitted = false;
     for (let tries = 0; tries < 20; tries++) {
+        await page.focus(inputSelector);
         await page.keyboard.press('Enter');
-        await sleep(1500);
+        await sleep(2000);
         const postSubmitVal = await page.evaluate((sel) => {
             const el = document.querySelector(sel);
             return el ? (el.value || el.innerText || '').trim() : '';
@@ -110,13 +145,45 @@ export async function runVisionPromptGeneration(selectedImages, promptText, over
     console.log('Waiting for response...');
     let lastHTML = '';
     let stableCount = 0;
-    while (true) {
+    let totalWaitTime = 0;
+    const maxWaitTime = 300000; // 5 minutes max wait
+    
+    while (totalWaitTime < maxWaitTime) {
         await sleep(2000);
+        totalWaitTime += 2000;
         let currentHTML = lastHTML;
         try { currentHTML = await page.evaluate(() => document.body ? document.body.innerHTML.length : 0); } catch (err) {}
         if (currentHTML === lastHTML) {
             stableCount++;
-            if (stableCount >= 4) break;
+            if (stableCount >= 4) {
+                let currentLastMessageText = null;
+                try {
+                    const shadowTexts = await page.$$eval('pierce/message-content', els => els.map(e => e.textContent.trim()));
+                    if (shadowTexts && shadowTexts.length > 0) currentLastMessageText = shadowTexts[shadowTexts.length - 1];
+                } catch(e) {}
+                
+                if (!currentLastMessageText) {
+                    currentLastMessageText = await page.evaluate(() => {
+                        const selectors = ['model-message', 'message-content', '[data-message-author="role_model"]', '.model-response-text', '.message-content', 'response-body', '#chat-history .response-container', '.query-response'];
+                        let foundElements = [];
+                        for (const sel of selectors) {
+                            const els = document.querySelectorAll(sel);
+                            if (els.length > 0) { foundElements = Array.from(els); break; }
+                        }
+                        if (foundElements.length === 0) return '';
+                        const lastMessage = foundElements[foundElements.length - 1];
+                        const contentBlock = lastMessage.querySelector('message-content') || lastMessage;
+                        return (contentBlock.innerText || contentBlock.textContent || '').trim();
+                    });
+                }
+                
+                if (currentLastMessageText && currentLastMessageText !== previousLastMessageText) {
+                    console.log('Response generation is totally complete!');
+                    break;
+                } else {
+                    console.log(`DOM is stable, but waiting for new response... (${totalWaitTime/1000}s)`);
+                }
+            }
         } else {
             lastHTML = currentHTML;
             stableCount = 0;
@@ -124,40 +191,57 @@ export async function runVisionPromptGeneration(selectedImages, promptText, over
     }
 
     // Extract DOM natively
-    const extractedText = await page.evaluate(() => {
-        const selectors = ['model-message', 'message-content', '[data-message-author="role_model"]', '.model-response-text', '.message-content', 'response-body', '#chat-history .response-container', '.query-response'];
-        let foundElements = [];
-        for (const sel of selectors) {
-            const els = document.querySelectorAll(sel);
-            if (els.length > 0) {
-                foundElements = Array.from(els);
-                break;
+    let extractedText = null;
+    try {
+        const shadowTexts = await page.$$eval('pierce/message-content', els => els.map(e => e.textContent.trim()));
+        if (shadowTexts && shadowTexts.length > 0) extractedText = shadowTexts[shadowTexts.length - 1];
+    } catch(e) {}
+    
+    if (!extractedText) {
+        extractedText = await page.evaluate(() => {
+            const selectors = ['model-message', 'message-content', '[data-message-author="role_model"]', '.model-response-text', '.message-content', 'response-body', '#chat-history .response-container', '.query-response'];
+            let foundElements = [];
+            for (const sel of selectors) {
+                const els = document.querySelectorAll(sel);
+                if (els.length > 0) { foundElements = Array.from(els); break; }
             }
-        }
-        if (foundElements.length === 0) return null;
-        
-        const lastMessage = foundElements[foundElements.length - 1];
-        const contentBlock = lastMessage.querySelector('message-content') || lastMessage;
-        return contentBlock.innerText || contentBlock.textContent;
-    });
+            if (foundElements.length === 0) return null;
+            
+            const lastMessage = foundElements[foundElements.length - 1];
+            const contentBlock = lastMessage.querySelector('message-content') || lastMessage;
+            return contentBlock.innerText || contentBlock.textContent;
+        });
+    }
 
     if (!extractedText) throw new Error("Could not scrape Gemini response!");
 
-    const finalWriteText = extractedText.trim();
+    let finalWriteText = extractedText.trim();
+    finalWriteText = finalWriteText.replace(/^plaintext/i, '');
+    finalWriteText = finalWriteText.replace(/^html/i, '');
+    finalWriteText = finalWriteText.trim();
     
-    // Append to Line Art prompts.txt natively
-    const promptsFile = path.resolve('./prompts.txt');
-    if (overwrite) {
-        fs.writeFileSync(promptsFile, finalWriteText);
-    } else {
-        try {
-            const existing = fs.readFileSync(promptsFile, 'utf-8');
-            fs.writeFileSync(promptsFile, existing + (existing.trim().length > 0 ? '\n\n---\n\n' : '') + finalWriteText);
-        } catch(e) {
-            fs.writeFileSync(promptsFile, finalWriteText);
+        if (finalWriteText.includes(targetPhrase)) {
+            console.log('✅ Generated prompt includes the required art style phrase.');
+            
+            // Append to Line Art prompts.txt natively
+            const promptsFile = path.resolve('./prompts.txt');
+            if (overwrite) {
+                fs.writeFileSync(promptsFile, finalWriteText);
+            } else {
+                try {
+                    const existing = fs.readFileSync(promptsFile, 'utf-8');
+                    fs.writeFileSync(promptsFile, existing + (existing.trim().length > 0 ? '\n\n---\n\n' : '') + finalWriteText);
+                } catch(e) {
+                    fs.writeFileSync(promptsFile, finalWriteText);
+                }
+            }
+        
+            try { await page.close(); } catch(e){}
+            return finalWriteText;
+        } else {
+            console.log('❌ Generated prompt is missing the required phrase. Retrying...');
+            try { await page.close(); } catch(e){}
+            attempt++;
         }
     }
-
-    try { await page.close(); } catch(e){}
-    return finalWriteText;
 }

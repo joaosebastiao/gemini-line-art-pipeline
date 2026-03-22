@@ -2,13 +2,43 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
+import util from 'util';
 import { fileURLToPath } from 'url';
+import { exec } from 'child_process';
+import os from 'os';
 import { runImageGeneration } from './image-generator.js';
 import { runPromptGeneration } from './prompt-generator.js';
 import { runVisionPromptGeneration } from './vision-prompt-generator.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const logDir = path.join(__dirname, 'logs');
+if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+const dateObj = new Date();
+const dateStr = `${dateObj.getFullYear()}-${String(dateObj.getMonth()+1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
+const logFile = fs.createWriteStream(path.join(logDir, `gemini-app-${dateStr}.log`), { flags: 'a' });
+
+const originalConsoleLog = console.log;
+const originalConsoleError = console.error;
+
+console.log = function (...args) {
+    const timestamp = new Date().toISOString();
+    logFile.write(`[${timestamp}] [INFO] ${util.format(...args)}\n`);
+    originalConsoleLog.apply(console, args);
+};
+console.error = function (...args) {
+    const timestamp = new Date().toISOString();
+    logFile.write(`[${timestamp}] [ERROR] ${util.format(...args)}\n`);
+    originalConsoleError.apply(console, args);
+};
+
+process.on('uncaughtException', (err) => {
+    console.error('UNCAUGHT EXCEPTION:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('UNHANDLED REJECTION at:', promise, 'reason:', reason);
+});
 
 const app = express();
 const PORT = 3000;
@@ -22,9 +52,9 @@ app.use('/draft_downloads', express.static(path.join(__dirname, 'draft_downloads
 app.use('/line_art', express.static(path.join(__dirname, 'line art')));
 
 app.post('/api/images', async (req, res) => {
-    const { imageCount, type, theme } = req.body;
+    const { imageCount, type, theme, loopIndex } = req.body;
     try {
-        await runImageGeneration(imageCount, type || 'lineart', theme);
+        await runImageGeneration(imageCount, type || 'lineart', theme, loopIndex);
         res.json({ message: `Successfully completed line art phase with Total Images = ${imageCount}` });
     } catch (err) {
         console.error(err);
@@ -33,9 +63,9 @@ app.post('/api/images', async (req, res) => {
 });
 
 app.post('/api/drafts', async (req, res) => {
-    const { imageCount } = req.body;
+    const { imageCount, theme, loopIndex } = req.body;
     try {
-        await runImageGeneration(imageCount, 'draft');
+        await runImageGeneration(imageCount, 'draft', theme, loopIndex);
         res.json({ message: `Successfully completed drafts phase with Total Images = ${imageCount}` });
     } catch (err) {
         console.error(err);
@@ -47,7 +77,7 @@ app.post('/api/prompts', async (req, res) => {
     const { promptText, title, draftTemplate, theme, numIdeas } = req.body;
     try {
         const result = await runPromptGeneration(promptText, title, draftTemplate, theme, parseInt(numIdeas) || 0);
-        res.json({ status: 'Successfully pulled ideas and dynamically wrapped them!', result });
+        res.json({ status: 'Successfully pulled ideas and dynamically wrapped them!', result: result.text, rawIdeas: result.ideas });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });
@@ -85,10 +115,14 @@ app.get('/api/draft-references', (req, res) => {
 });
 
 app.get('/api/draft-downloads', (req, res) => {
+    const { theme } = req.query;
     try {
-        const refDir = path.join(__dirname, 'draft_downloads');
+        const safeTheme = theme ? theme.replace(/[^a-z0-9 _-]/gi, '_').trim() : '';
+        const refDir = safeTheme ? path.join(__dirname, 'draft_downloads', safeTheme) : path.join(__dirname, 'draft_downloads');
+        const folderUrlPath = `/draft_downloads/${safeTheme ? encodeURIComponent(safeTheme) + '/' : ''}`;
+
         if (!fs.existsSync(refDir)) {
-            res.json({ images: [] });
+            res.json({ folderPath: folderUrlPath, images: [] });
             return;
         }
         const files = fs.readdirSync(refDir)
@@ -96,16 +130,16 @@ app.get('/api/draft-downloads', (req, res) => {
             .sort((a,b) => {
                 return fs.statSync(path.join(refDir, b)).mtime.getTime() - fs.statSync(path.join(refDir, a)).mtime.getTime(); 
             });
-        res.json({ images: files });
+        res.json({ folderPath: folderUrlPath, images: files });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
 app.post('/api/vision-prompt', async (req, res) => {
-    const { selectedImages, promptText, overwrite } = req.body;
+    const { selectedImages, promptText, overwrite, theme } = req.body;
     try {
-        const result = await runVisionPromptGeneration(selectedImages, promptText, overwrite);
+        const result = await runVisionPromptGeneration(selectedImages, promptText, overwrite, theme);
         res.json({ status: 'Successfully scraped line art prompt!', result });
     } catch (err) {
         console.error(err);
@@ -142,10 +176,14 @@ const DRAFT_PROMPTS_FILE = path.join(__dirname, 'draft_prompts.txt');
 const BASE_PROMPT_FILE = path.join(__dirname, 'base_prompt_template.txt');
 const WRAPPER_PROMPT_FILE = path.join(__dirname, 'draft_wrapper_template.txt');
 const VISION_PROMPT_FILE = path.join(__dirname, 'vision_prompt_template.txt');
+const CHARACTER_FILE = path.join(__dirname, 'character.txt');
+const VISION_CHARACTER_FILE = path.join(__dirname, 'vision_character.txt');
 
 // Initialize physical filesystem components automatically if not found
+if (!fs.existsSync(CHARACTER_FILE)) fs.writeFileSync(CHARACTER_FILE, 'A cute anthropomorphic dog', 'utf-8');
+if (!fs.existsSync(VISION_CHARACTER_FILE)) fs.writeFileSync(VISION_CHARACTER_FILE, 'A cute anthropomorphic dog', 'utf-8');
 if (!fs.existsSync(BASE_PROMPT_FILE)) {
-    const defaultText = `Brainstorm {numIdeas} page ideas for a cozy coloring book. Each idea should be just one sentence, and include a setting, and a character doing an action. Be as varied as possible in your settings and actions. I'm going to use your answer as a prompt, so write three dashes --- like this between each idea. Also don't write anything before or after the ideas.\n\nFor the character, always say: {character}\n\nTheme: {theme}`;
+    const defaultText = `Brainstorm {numIdeas} page ideas for a cozy coloring book. Each idea should be just one sentence, and include a setting, and a character doing an action. Be as varied as possible in your settings and actions. I'm going to use your answer as a prompt, so write three dashes --- like this between each idea. Also don't write anything before or after the ideas.\n\nFor the character, always say: {character}\n\nTheme: {theme}\n\nNotes: {notes}`;
     fs.writeFileSync(BASE_PROMPT_FILE, defaultText, 'utf-8');
 }
 if (!fs.existsSync(WRAPPER_PROMPT_FILE)) {
@@ -261,6 +299,127 @@ app.post('/api/vision-prompt-file', (req, res) => {
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
+});
+
+app.get('/api/character-file', (req, res) => {
+    try {
+        const content = fs.existsSync(CHARACTER_FILE) ? fs.readFileSync(CHARACTER_FILE, 'utf-8') : '';
+        res.json({ content });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/character-file', (req, res) => {
+    const { content } = req.body;
+    try {
+        fs.writeFileSync(CHARACTER_FILE, content, 'utf-8');
+        res.json({ status: 'success' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/vision-character-file', (req, res) => {
+    try {
+        const content = fs.existsSync(VISION_CHARACTER_FILE) ? fs.readFileSync(VISION_CHARACTER_FILE, 'utf-8') : '';
+        res.json({ content });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/vision-character-file', (req, res) => {
+    const { content } = req.body;
+    try {
+        fs.writeFileSync(VISION_CHARACTER_FILE, content, 'utf-8');
+        res.json({ status: 'success' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/save-prompts-file', (req, res) => {
+    try {
+        fs.writeFileSync(PROMPTS_FILE, req.body.content, 'utf-8');
+        res.json({ status: 'success' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/kill-chrome', (req, res) => {
+    exec('netstat -ano | findstr :9222', (err, stdout) => {
+        if (stdout) {
+            const match = stdout.match(/LISTENING\s+(\d+)/);
+            if (match) {
+                const pid = match[1];
+                exec(`taskkill /PID ${pid} /F`, (err2) => {
+                    res.json({ status: 'Chrome successfully killed', pid });
+                });
+                return;
+            }
+        }
+        res.json({ status: 'Port not running' });
+    });
+});
+
+app.get('/api/get-unique-theme', (req, res) => {
+    let base = req.query.base;
+    if (!base) return res.json({ theme: 'Untitled' });
+    base = base.replace(/[^a-zA-Z0-9 _-]/g, '').trim();
+
+    const lineArtDir = path.join(__dirname, 'line art');
+    if (!fs.existsSync(lineArtDir)) fs.mkdirSync(lineArtDir, { recursive: true });
+
+    let attempt = 1;
+    let current = base;
+    while (fs.existsSync(path.join(lineArtDir, current))) {
+        current = `${base} ${attempt}`;
+        attempt++;
+    }
+    
+    // PREEMPTIVELY RESERVE OS DIRECTORIES TO PREVENT ITERATION OVERLAPS
+    fs.mkdirSync(path.join(lineArtDir, current), { recursive: true });
+    const draftDir = path.join(__dirname, 'draft_downloads', current);
+    fs.mkdirSync(draftDir, { recursive: true });
+
+    res.json({ theme: current });
+});
+
+app.get('/api/themes', (req, res) => {
+    const lineArtDir = path.join(__dirname, 'line art');
+    if (!fs.existsSync(lineArtDir)) return res.json({ themes: [] });
+    const folders = fs.readdirSync(lineArtDir).filter(f => fs.statSync(path.join(lineArtDir, f)).isDirectory());
+    res.json({ themes: folders });
+});
+
+app.get('/api/theme-metadata', (req, res) => {
+    const theme = req.query.theme;
+    const metaPath = path.join(__dirname, 'line art', theme, 'metadata.json');
+    if (fs.existsSync(metaPath)) res.json(JSON.parse(fs.readFileSync(metaPath, 'utf8')));
+    else res.json([]);
+});
+
+app.post('/api/save-metadata', (req, res) => {
+    const { theme, draftImage, prompt, lineArtImages } = req.body;
+    const metaPath = path.join(__dirname, 'line art', theme, 'metadata.json');
+    let data = [];
+    if (fs.existsSync(metaPath)) {
+        try { data = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch(e){}
+    }
+    
+    const existing = data.find(d => d.draftImage === draftImage);
+    if (existing) {
+        existing.prompt = prompt;
+        lineArtImages.forEach(img => {
+            if(!existing.lineArtImages.includes(img)) existing.lineArtImages.push(img);
+        });
+    } else {
+        data.push({ draftImage, prompt, lineArtImages });
+    }
+    fs.writeFileSync(metaPath, JSON.stringify(data, null, 2));
+    res.json({ success: true });
 });
 
 app.listen(PORT, () => {

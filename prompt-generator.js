@@ -55,6 +55,32 @@ export async function runPromptGeneration(promptText, title, draftTemplate, them
     
     console.log('Submitting textual prompt...');
     
+    let previousLastMessageText = null;
+    try {
+        const shadowTexts = await page.$$eval('pierce/message-content', els => els.map(e => e.textContent.trim()));
+        if (shadowTexts && shadowTexts.length > 0) {
+            previousLastMessageText = shadowTexts[shadowTexts.length - 1];
+        }
+    } catch(e) {}
+    
+    if (!previousLastMessageText) {
+        previousLastMessageText = await page.evaluate(() => {
+            const selectors = ['model-message', 'message-content', '[data-message-author="role_model"]', '.model-response-text', '.message-content', 'response-body', '#chat-history .response-container', '.query-response'];
+            let foundElements = [];
+            for (const sel of selectors) {
+                const els = document.querySelectorAll(sel);
+                if (els.length > 0) {
+                    foundElements = Array.from(els);
+                    break;
+                }
+            }
+            if (foundElements.length === 0) return '';
+            const lastMessage = foundElements[foundElements.length - 1];
+            const contentBlock = lastMessage.querySelector('message-content') || lastMessage;
+            return (contentBlock.innerText || contentBlock.textContent || '').trim();
+        });
+    }
+
     // Clear and Paste prompt
     await page.evaluate((sel) => {
         const el = document.querySelector(sel);
@@ -102,17 +128,52 @@ export async function runPromptGeneration(promptText, title, draftTemplate, them
     // Wait for text generation to finish by monitoring document.body length
     let lastHTML = '';
     let stableCount = 0;
-    while (true) {
+    let totalWaitTime = 0;
+    const maxWaitTime = 300000; // 5 minutes max wait
+    
+    while (totalWaitTime < maxWaitTime) {
         await sleep(2000);
+        totalWaitTime += 2000;
         let currentHTML = lastHTML;
         try {
             currentHTML = await page.evaluate(() => document.body ? document.body.innerHTML.length : 0);
         } catch (err) {}
+        
         if (currentHTML === lastHTML) {
             stableCount++;
             if (stableCount >= 4) {
-                console.log('Response generation is totally complete!');
-                break;
+                let currentLastMessageText = null;
+                try {
+                    const shadowTexts = await page.$$eval('pierce/message-content', els => els.map(e => e.textContent.trim()));
+                    if (shadowTexts && shadowTexts.length > 0) {
+                        currentLastMessageText = shadowTexts[shadowTexts.length - 1];
+                    }
+                } catch(e) {}
+                
+                if (!currentLastMessageText) {
+                    currentLastMessageText = await page.evaluate(() => {
+                        const selectors = ['model-message', 'message-content', '[data-message-author="role_model"]', '.model-response-text', '.message-content', 'response-body', '#chat-history .response-container', '.query-response'];
+                        let foundElements = [];
+                        for (const sel of selectors) {
+                            const els = document.querySelectorAll(sel);
+                            if (els.length > 0) {
+                                foundElements = Array.from(els);
+                                break;
+                            }
+                        }
+                        if (foundElements.length === 0) return '';
+                        const lastMessage = foundElements[foundElements.length - 1];
+                        const contentBlock = lastMessage.querySelector('message-content') || lastMessage;
+                        return (contentBlock.innerText || contentBlock.textContent || '').trim();
+                    });
+                }
+                
+                if (currentLastMessageText && currentLastMessageText !== previousLastMessageText) {
+                    console.log('Response generation is totally complete!');
+                    break;
+                } else {
+                    console.log(`DOM is stable, but waiting for new response... (${totalWaitTime/1000}s)`);
+                }
             }
         } else {
             lastHTML = currentHTML;
@@ -123,48 +184,52 @@ export async function runPromptGeneration(promptText, title, draftTemplate, them
     // Extract the text of the latest model response block
     console.log('Extracting text from the browser natively...');
     
-    const extractedText = await page.evaluate(() => {
-        // Broaden the target selectors for Gemini's highly dynamic DOM
-        const selectors = [
-            'model-message', 
-            'message-content', 
-            '[data-message-author="role_model"]',
-            '.model-response-text',
-            '.message-content',
-            'response-body',
-            '#chat-history .response-container',
-            '.query-response'
-        ];
-        
-        let foundElements = [];
-        for (const sel of selectors) {
-            const els = document.querySelectorAll(sel);
-            if (els.length > 0) {
-                foundElements = Array.from(els);
-                break;
-            }
+    let extractedText = null;
+    try {
+        const shadowTexts = await page.$$eval('pierce/message-content', els => els.map(e => e.textContent.trim()));
+        if (shadowTexts && shadowTexts.length > 0) {
+            extractedText = shadowTexts[shadowTexts.length - 1];
         }
-        
-        if (foundElements.length === 0) return null;
-        
-        const lastMessage = foundElements[foundElements.length - 1];
-        const contentBlock = lastMessage.querySelector('message-content') || lastMessage;
-        return contentBlock.innerText || contentBlock.textContent;
-    });
+    } catch(e) {}
     
+    if (!extractedText) {
+        extractedText = await page.evaluate(() => {
+            const selectors = ['model-message', 'message-content', '[data-message-author="role_model"]', '.model-response-text', '.message-content', 'response-body', '#chat-history .response-container', '.query-response'];
+            let foundElements = [];
+            for (const sel of selectors) {
+                const els = document.querySelectorAll(sel);
+                if (els.length > 0) {
+                    foundElements = Array.from(els);
+                    break;
+                }
+            }
+            if (foundElements.length === 0) return null;
+            const lastMessage = foundElements[foundElements.length - 1];
+            const contentBlock = lastMessage.querySelector('message-content') || lastMessage;
+            return contentBlock.innerText || contentBlock.textContent;
+        });
+    }
+
     if (!extractedText) {
         throw new Error("Could not find Gemini's response text in the DOM!");
     }
 
     // Clean extracted block
-    const safeText = extractedText.trim();
+    let safeText = extractedText.trim();
+    safeText = safeText.replace(/^plaintext/i, '');
+    safeText = safeText.replace(/^html/i, '');
+    safeText = safeText.trim();
     
     // Phase 2: Intercept the text, slice it into concepts, and wrap them strictly in blueprint payloads
     let finalWriteText = safeText;
+    let rawIdeasArray = [];
+    
     if (draftTemplate && theme) {
         const cleanText = safeText.replace(/\*/g, ''); // Sweep asterisks Gemini adds around text sometimes
         let ideas = cleanText.split('---').map(s => s.trim()).filter(s => s.length > 5);
         if (maxIdeas > 0) ideas = ideas.slice(0, maxIdeas);
+        
+        rawIdeasArray = ideas;
         
         const blocks = ideas.map(idea => {
             return draftTemplate
@@ -176,7 +241,8 @@ export async function runPromptGeneration(promptText, title, draftTemplate, them
     } else if (maxIdeas > 0) {
         const cleanText = safeText.replace(/\*/g, '');
         let ideas = cleanText.split('---').map(s => s.trim()).filter(s => s.length > 5);
-        finalWriteText = ideas.slice(0, maxIdeas).join('\n\n---\n\n');
+        rawIdeasArray = ideas.slice(0, maxIdeas);
+        finalWriteText = rawIdeasArray.join('\n\n---\n\n');
     }
 
     const outputDir = path.resolve('./generated_prompts');
@@ -206,5 +272,5 @@ export async function runPromptGeneration(promptText, title, draftTemplate, them
     console.log('Extracted and Wrapped securely! Sweeping up tab...');
     try { await page.close(); } catch(e){}
     
-    return finalWriteText;
+    return { text: finalWriteText, ideas: rawIdeasArray };
 }

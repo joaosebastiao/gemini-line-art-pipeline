@@ -37,7 +37,7 @@ async function downloadImage(page, url, filepath) {
     }
 }
 
-export async function runImageGeneration(imageCountArg, type = 'lineart', theme = '') {
+export async function runImageGeneration(imageCountArg, type = 'lineart', theme = '', loopIndex = null) {
     const IMAGE_COUNT = imageCountArg !== undefined ? imageCountArg : 1;
     console.log(`Starting Gemini Headless Image Generator [Mode: ${type.toUpperCase()}] [Theme: ${theme || 'Default'}]...`);
     
@@ -45,8 +45,13 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
     const safeTheme = theme ? theme.replace(/[^a-z0-9 _-]/gi, '_').trim() : '';
     const PROMPTS_FILE = type === 'lineart' ? './prompts.txt' : './draft_prompts.txt';
     const REFERENCES_DIR = type === 'lineart' ? './references' : './draft_references';
-    const outputBase = type === 'draft' ? './draft_downloads' : (safeTheme ? `./line art/${safeTheme}` : './line art');
+    const outputBase = type === 'draft' ? (safeTheme ? `./draft_downloads/${safeTheme}` : './draft_downloads') : (safeTheme ? `./line art/${safeTheme}` : './line art');
     const DOWNLOADS_DIR = path.resolve(outputBase);
+
+    // Create uniquely isolated download temp directory for this specific run natively perfectly eliminating race conditions
+    const uniqueTaskId = crypto.randomBytes(6).toString('hex');
+    const tempDownloadDir = path.resolve(DOWNLOADS_DIR, `.temp_${Date.now()}_${uniqueTaskId}`);
+    if (!fs.existsSync(tempDownloadDir)) fs.mkdirSync(tempDownloadDir, { recursive: true });
 
     // Ensure necessary directories and files exist
     if (!fs.existsSync(DOWNLOADS_DIR)) fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
@@ -62,38 +67,45 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
     }
     
     // Setup background download tracking
-    const scriptStartTime = Date.now() - 5000; // 5 seconds buffer
     let expectedDownloads = 0;
     let completedDownloads = 0;
     
+    let isWatching = true;
+    
     // Background watcher that runs independently
     const watchDownloads = async () => {
-        const userDownloads = path.join(os.homedir(), 'Downloads');
-        while (true) {
+        while (isWatching) {
             try {
-                const files = fs.readdirSync(userDownloads);
+                if (!fs.existsSync(tempDownloadDir)) {
+                    await sleep(1500);
+                    continue;
+                }
+                const files = fs.readdirSync(tempDownloadDir);
                 for (const file of files) {
                     if (file.endsWith('.crdownload') || file.endsWith('.tmp') || !file.match(/\.(jpe?g|png|gif|webp)$/i)) continue;
                     
-                    // Ignore personal files - only scoop Gemini images downloaded by the script
-                    if (!file.toLowerCase().startsWith('gemini_generated_image')) continue;
-                    
-                    const filePath = path.join(userDownloads, file);
-                    const stat = fs.statSync(filePath);
-                    
-                    // If it's a newly generated/modified image
-                    if (stat.birthtimeMs > scriptStartTime || stat.mtimeMs > scriptStartTime) {
-                        await sleep(500); // Wait briefly to avoid filesystem locks
-                        const newPath = path.join(DOWNLOADS_DIR, file);
+                    const filePath = path.join(tempDownloadDir, file);
+                    await sleep(500); // Wait briefly to avoid filesystem locks
+                        
+                        const ext = path.extname(file) || '.png';
+                        let basePrefix = loopIndex ? String(loopIndex) : `gemini_gen_${Date.now()}`;
+                        let suffix = 0;
+                        let destPath;
+                        while(true) {
+                            const name = suffix === 0 ? `${basePrefix}${ext}` : `${basePrefix}_var${suffix}${ext}`;
+                            destPath = path.join(DOWNLOADS_DIR, name);
+                            if (!fs.existsSync(destPath)) break;
+                            suffix++;
+                        }
+                        
                         try {
-                            fs.copyFileSync(filePath, newPath);
+                            fs.copyFileSync(filePath, destPath);
                             fs.unlinkSync(filePath);
                             completedDownloads++;
                             console.log(`\n✅ [Background] Retrieved ${file}! (${completedDownloads}/${expectedDownloads} finished)\n`);
                         } catch (moveErr) {
                             // File likely locked by Chrome, will try again next loop
                         }
-                    }
                 }
             } catch (e) {}
             await sleep(1500); // Check every 1.5 seconds
@@ -157,6 +169,8 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
     }
 
     const authPage = await browser.newPage();
+    const authClient = await authPage.target().createCDPSession();
+    await authClient.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: tempDownloadDir });
 
     console.log('Navigating to Gemini...');
     await authPage.goto('https://gemini.google.com/app', { waitUntil: 'networkidle2' });
@@ -174,9 +188,6 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
                 // Wait for the chat input box to ensure we are fully logged in
                 await authPage.waitForSelector('rich-textarea p, textarea', { timeout: 5000 });
                 console.log('Successfully logged in and chat interface is ready!');
-                
-                // Immediately sweep the auth tab since we've verified the session is alive
-                try { await authPage.close(); } catch (e) {}
                 break;
             } catch (e) {
                 // Still loading or maybe another interstitial
@@ -192,12 +203,32 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
         const prompt = prompts[i];
         
         for (let variation = 0; variation < IMAGE_COUNT; variation++) {
-            console.log(`\n[${i + 1}/${prompts.length}] Processing prompt: "${prompt}" (Generation ${variation + 1}/${IMAGE_COUNT})`);
+            let page;
+            try {
+                console.log(`\n[${i + 1}/${prompts.length}] Processing prompt: "${prompt}" (Generation ${variation + 1}/${IMAGE_COUNT})`);
             
-            // Open a fresh tab for EACH variation
-            const page = await browser.newPage();
-            await page.setViewport({ width: 1280, height: 800 });
-            await page.goto('https://gemini.google.com/app', { waitUntil: 'networkidle2' });
+            // Check if the OS implicitly already holds the completed variation payload securely from a prior execution boundary natively
+            if (loopIndex !== null) {
+                const basePrefix = String(loopIndex);
+                const possibleName = variation === 0 ? basePrefix : `${basePrefix}_var${variation}`;
+                const existingFiles = fs.readdirSync(DOWNLOADS_DIR).filter(f => f.startsWith(possibleName + '.'));
+                if (existingFiles.length > 0) {
+                    console.log(`[Cache Hit] Image heavily cached natively on OS payload (${existingFiles[0]}). Bypassing Google Gemini pings redundantly!`);
+                    if (i === 0 && variation === 0) { try { await authPage.close(); } catch(e){} }
+                    continue; 
+                }
+            }
+            
+            // Reuse the auth tab for the first generation natively preventing visual reload glitch
+            if (i === 0 && variation === 0) {
+                page = authPage;
+            } else {
+                page = await browser.newPage();
+                await page.setViewport({ width: 1280, height: 800 });
+                const client = await page.target().createCDPSession();
+                await client.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: tempDownloadDir });
+                await page.goto('https://gemini.google.com/app', { waitUntil: 'networkidle2' });
+            }
             
             // 1. Find the text input area
             const inputSelector = 'rich-textarea p, textarea, [contenteditable="true"]';
@@ -206,9 +237,17 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
             // Give Gemini's heavy javascript interface an extra second to completely finish rendering
             await sleep(1500); 
             
-            // Proactively tag any existing images in the tab (if any history loaded) so we don't accidentally download them
+            // Proactively tag any existing images inside Shadow DOMs so we don't accidentally download them
             await page.evaluate(() => {
-                document.querySelectorAll('img[src*="googleusercontent.com"], img[src^="blob:"]').forEach(img => img.dataset.downloaded = 'true');
+                function findAllShadow(selector, root = document) {
+                    let found = Array.from(root.querySelectorAll(selector));
+                    const allElements = root.querySelectorAll('*');
+                    for (const el of allElements) {
+                        if (el.shadowRoot) found = found.concat(findAllShadow(selector, el.shadowRoot));
+                    }
+                    return found;
+                }
+                findAllShadow('img[src*="googleusercontent.com"], img[src^="blob:"]').forEach(img => img.dataset.downloaded = 'true');
             });
 
             // 2. Type prompt
@@ -233,7 +272,7 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
                     el.focus();
                     document.execCommand('insertText', false, text);
                 }
-            }, `Generate an image of: ${p}`, inputSelector);
+            }, p, inputSelector);
             await sleep(1000);
 
             // 3. Upload Reference Images via simulated Paste
@@ -280,12 +319,14 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
 
             // 4. Submit with active polling for upload completion and Google backend cancellations
             if (referenceImages.length > 0) {
-                console.log('Images pasted. Actively polling the Enter key until Google finishes processing them...');
+                console.log('Images pasted natively. Waiting exactly 5.5 seconds for Gemini to process the local buffers natively before submitting...');
+                await sleep(5500);
             }
             
             let enterClicks = 0;
-            // Poll for up to 60 seconds (approx 45 tries at 1.5s intervals)
-            for (let tries = 0; tries < 45; tries++) {
+            // Poll for up to 60 seconds (approx 30 tries at 2s intervals)
+            for (let tries = 0; tries < 30; tries++) {
+                await page.focus(inputSelector);
                 await page.keyboard.press('Enter');
                 enterClicks++;
                 
@@ -293,7 +334,7 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
                     console.log('Pressed Enter. Waiting to see if generation sustains...');
                 }
                 
-                await sleep(1500);
+                await sleep(2000);
                 
                 const postSubmitVal = await page.evaluate((sel) => {
                     const el = document.querySelector(sel);
@@ -321,28 +362,34 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
             
             if (!submitted) {
                 console.log('Error: Google kept cancelling the prompt. Skipping to the next one.');
-                await page.keyboard.down('Control');
-                await page.keyboard.press('A');
-                await page.keyboard.up('Control');
-                await page.keyboard.press('Backspace');
+                if (page && page !== authPage) {
+                    try { await page.close(); } catch (e) {}
+                } else {
+                    await page.keyboard.down('Control');
+                    await page.keyboard.press('A');
+                    await page.keyboard.up('Control');
+                    await page.keyboard.press('Backspace');
+                }
                 continue;
             }
 
-            console.log('Generation stabilized! Waiting for it to finish naturally...');
+            console.log('Prompt successfully submitted. Waiting a mandatory 20 seconds for the heavy base rendering to complete natively...');
+            await sleep(20000);
+            console.log('Base rendering time elapsed! Polling for complete stabilization...');
 
             // 4. Wait for generation to completely finish
             let lastHTML = '';
             let stableCount = 0;
             while (true) {
-                await sleep(2000);
+                await sleep(1000); // Check natively every 1000ms natively cutting ping latency in half
                 let currentHTML = lastHTML;
                 try {
                     currentHTML = await page.evaluate(() => document.body ? document.body.innerHTML.length : 0);
                 } catch (err) {}
-                if (currentHTML === lastHTML) {
+                if (currentHTML === lastHTML && currentHTML > 0) {
                     stableCount++;
-                    if (stableCount >= 4) {
-                        console.log('Generation is complete! Finding download buttons...');
+                    if (stableCount >= 2) { // Total 2s stability perfectly confirming output safely
+                        console.log('Generation perfectly complete internally natively! Moving instantly...');
                         break;
                     }
                 } else {
@@ -354,11 +401,28 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
             // 5. Download the images by opening the Lightbox / Gallery
             console.log('Images generated! Triggering native downloads...');
             
-            const clickedCount = await page.evaluate(async (refCount) => {
-                const sleep = ms => new Promise(r => setTimeout(r, ms));
-                let clicks = 0;
+            let secondaryDownloadAttempt = false;
+
+            while (true) { // Outer 30s Double-Click OS Logic
+                let cumulativeClicks = 0;
+                let downloadAttempts = 0;
                 
-                const allImages = Array.from(document.querySelectorAll('img[src*="googleusercontent.com"], img[src^="blob:"]'));
+                while (downloadAttempts < 5) { // Internal DOM Polling natively rescuing async DOMs safely
+                    downloadAttempts++;
+                    const clicksThisRound = await page.evaluate(async (refCount) => {
+                    const sleep = ms => new Promise(r => setTimeout(r, ms));
+                    let clicks = 0;
+                    
+                    function findAllShadow(selector, root = document) {
+                        let found = Array.from(root.querySelectorAll(selector));
+                        const allElements = root.querySelectorAll('*');
+                        for (const el of allElements) {
+                            if (el.shadowRoot) found = found.concat(findAllShadow(selector, el.shadowRoot));
+                        }
+                        return found;
+                    }
+                
+                const allImages = findAllShadow('img[src*="googleusercontent.com"], img[src^="blob:"]');
                 let untaggedImages = allImages.filter(img => !img.dataset.downloaded);
                 
                 // Mathematically ignore reference images: Since this is a completely fresh tab perfectly isolated,
@@ -369,65 +433,144 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
                 
                 for (let i = 0; i < untaggedImages.length; i++) {
                     const img = untaggedImages[i];
-                    img.dataset.downloaded = 'true';
                     
-                    // Fix for "below the fold" issues: scroll the image into the center of the screen
-                    img.scrollIntoView({ behavior: 'instant', block: 'center' });
-                    await sleep(500); // Wait for potential lazy-loads instantly triggered by scrolling
+                    // Fix for "below the fold" issues: scroll the image natively into viewport
+                    try { img.scrollIntoView({ behavior: 'instant', block: 'center' }); } catch(err){}
+                    
+                    // Forcefully synthesize a Native React Mouse Hover event breaking Google's layout encapsulation visually
+                    try {
+                        const hoverEvent = new MouseEvent('mouseover', { view: window, bubbles: true, cancelable: true });
+                        img.dispatchEvent(hoverEvent);
+                        if (img.parentElement) img.parentElement.dispatchEvent(hoverEvent);
+                    } catch(err) {}
+
+                    await sleep(350); 
                     
                     let curr = img.parentElement;
                     let foundDirectBtn = null;
-                    for (let lvl = 0; lvl < 6; lvl++) {
+                    for (let lvl = 0; lvl < 8; lvl++) {
                         if (!curr) break;
-                        const icon = curr.querySelector('mat-icon[data-mat-icon-name="download"]');
-                        if (icon) {
-                            foundDirectBtn = icon.closest('button') || icon;
+                        let possibleIcons = findAllShadow('[data-mat-icon-name*="ownload" i], [aria-label*="ownload" i], [mattooltip*="ownload" i], [data-test-id*="ownload" i]', curr);
+                        if (possibleIcons.length > 0) {
+                            foundDirectBtn = possibleIcons[0].closest('button') || possibleIcons[0];
                             break;
                         }
-                        curr = curr.parentElement;
+                        curr = curr.parentElement || curr.getRootNode()?.host; 
                     }
                     
                     if (foundDirectBtn) {
                         foundDirectBtn.click();
+                        img.dataset.downloaded = 'true';
                         clicks++;
                         await sleep(500);
                     } else {
                         img.click();
                         if (img.parentElement) img.parentElement.click();
-                        await sleep(2000); 
                         
-                        const dlIcons = Array.from(document.querySelectorAll('mat-icon[data-mat-icon-name="download"]'));
-                        if (dlIcons.length > 0) {
-                            const targetIcon = dlIcons[dlIcons.length - 1];
-                            const dlButton = targetIcon.closest('button') || targetIcon;
-                            dlButton.click();
-                            clicks++;
+                        let secondaryIcons = [];
+                        let waited = 0;
+                        while (waited < 15000) {
+                            secondaryIcons = findAllShadow('button [data-mat-icon-name*="ownload" i], button[aria-label*="ownload" i], [mattooltip*="ownload" i], [data-test-id*="ownload" i]');
+                            if (secondaryIcons.length === 0) secondaryIcons = findAllShadow('[data-mat-icon-name*="ownload" i], [aria-label*="ownload" i], svg[aria-label*="ownload" i]');
+                            if (secondaryIcons.length > 0) break;
                             await sleep(500);
+                            waited += 500;
                         }
                         
+                        if (secondaryIcons.length > 0) {
+                            const targetIcon = secondaryIcons[secondaryIcons.length - 1];
+                            const dlButton = targetIcon.closest('button') || targetIcon.parentElement || targetIcon.getRootNode()?.host || targetIcon;
+                            if (dlButton) {
+                                dlButton.click();
+                                img.dataset.downloaded = 'true';
+                                clicks++;
+                                await sleep(800);
+                            }
+                        }
+                        
+                        // Force escape the lightbox natively
                         document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-                        await sleep(1000);
+                        await sleep(1500);
                     }
                 }
                 return clicks;
             }, referenceImages.length);
             
-            expectedDownloads += clickedCount;
-            console.log(`Triggered ${clickedCount} downloads! Continuing...`);
+                cumulativeClicks += clicksThisRound;
+                
+                const remainingUntagged = await page.evaluate((refCount) => {
+                    function findAllShadow(selector, root = document) {
+                        let found = Array.from(root.querySelectorAll(selector));
+                        const allElements = root.querySelectorAll('*');
+                        for (const el of allElements) {
+                            if (el.shadowRoot) found = found.concat(findAllShadow(selector, el.shadowRoot));
+                        }
+                        return found;
+                    }
+                    
+                    const allImages = findAllShadow('img[src*="googleusercontent.com"], img[src^="blob:"]');
+                    let untag = allImages.filter(img => !img.dataset.downloaded);
+                    if (refCount > 0) untag = untag.slice(refCount);
+                    return untag.length;
+                }, referenceImages.length);
 
-            // Before moving to the next variation or prompt, wait for all downloads to finish from THIS tab
-            if (expectedDownloads > completedDownloads) {
-                console.log(`Waiting for ${expectedDownloads - completedDownloads} background downloads to finish before safely closing tab...`);
-                let timeoutCounter = 0;
-                while (completedDownloads < expectedDownloads && timeoutCounter < 180) {
-                    await sleep(1000);
-                    timeoutCounter++;
+                if (remainingUntagged === 0 && cumulativeClicks > 0) {
+                    break;
+                } else if (remainingUntagged === 0 && cumulativeClicks === 0) {
+                    console.log(`[Download Probe ${downloadAttempts}/5] Zero output images detected visually. Assuming Google API network latency cleanly... Sleeping 5s natively re-polling...`);
+                    await sleep(5000);
+                } else {
+                    console.log(`[Download Probe ${downloadAttempts}/5] Chrome inherently missed ${remainingUntagged} valid OS bytes inline logically. Sleeping 5s natively re-polling...`);
+                    await sleep(5000);
                 }
+            } // Safely closes While (downloadAttempts < 5) organically
+
+            if (cumulativeClicks === 0) throw new Error("Fatal Assertion: Gemini natively printed output buffers, but Chromium consistently failed to isolate any native download buttons completely natively. Aborting cleanly.");
+            
+            expectedDownloads += cumulativeClicks;
+            console.log(`Successfully dispatched ${cumulativeClicks} downloads! Waiting up to 30s for physical completion...`);
+
+            // Check completion for 30s exclusively natively
+            let timeoutCounter = 0;
+            while (completedDownloads < expectedDownloads && timeoutCounter < 30) {
+                await sleep(1000);
+                timeoutCounter++;
             }
             
-            console.log('All image retrievals complete! Sweeping up the tab...');
-            try { await page.close(); } catch (e) {}
-
+            if (completedDownloads >= expectedDownloads) {
+                console.log('All image retrievals strictly complete natively! Sweeping up the tab...');
+                try { await page.close(); } catch (e) {}
+                break; // All downloads physically succeeded organically exiting safely natively
+            }
+            
+            if (!secondaryDownloadAttempt) {
+                console.log(`WARNING: Only ${completedDownloads}/${expectedDownloads} finished resolving in 30s. Scrubbing internal markers and triggering a second batch click natively!`);
+                secondaryDownloadAttempt = true;
+                await page.evaluate(() => {
+                    function findAllShadow(selector, root = document) {
+                        let found = Array.from(root.querySelectorAll(selector));
+                        const allElements = root.querySelectorAll('*');
+                        for (const el of allElements) {
+                            if (el.shadowRoot) found = found.concat(findAllShadow(selector, el.shadowRoot));
+                        }
+                        return found;
+                    }
+                    const allImages = findAllShadow('img[src*="googleusercontent.com"], img[src^="blob:"]');
+                    allImages.forEach(img => delete img.dataset.downloaded);
+                });
+            } else {
+                try { await page.close(); } catch (e) {}
+                throw new Error(`Chromium network downloads powerfully hung natively after 60 total seconds securely (${completedDownloads}/${expectedDownloads}). Aborting generation natively to forcefully cycle OS Tab.`);
+            }
+        }
+            } catch (err) {
+                console.error(`\n❌ [ERROR] Fatal failure during Prompt ${i + 1}, Variation ${variation + 1}:`);
+                console.error(err);
+                console.log(`Skipping to next iteration to ensure overnight batch continues cleanly.`);
+                if (page && page !== authPage) {
+                    try { await page.close(); } catch (e) {}
+                }
+            }
             // Small delay before the next variation tab
             await sleep(2000);
         }
@@ -435,5 +578,8 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
 
     console.log(`\nAll prompts processed! Triggered a total of ${expectedDownloads} downloads.`);
     
+    isWatching = false;
+    // Clean up purely isolated native temp directory identically preserving system integrity natively
+    try { fs.rmSync(tempDownloadDir, { recursive: true, force: true }); } catch (e) {}
     console.log('\nProcess totally complete! You can now close the browser manually if you wish.');
 }
