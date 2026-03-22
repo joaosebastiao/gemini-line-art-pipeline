@@ -202,10 +202,12 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
     for (let i = 0; i < prompts.length; i++) {
         const prompt = prompts[i];
         
+        const variationPromises = [];
         for (let variation = 0; variation < IMAGE_COUNT; variation++) {
+            variationPromises.push((async () => {
             let page;
             try {
-                console.log(`\n[${i + 1}/${prompts.length}] Processing prompt: "${prompt}" (Generation ${variation + 1}/${IMAGE_COUNT})`);
+                console.log(`\n[${i + 1}/${prompts.length}] Processing prompt: "${prompt}" (Generation ${variation + 1}/${IMAGE_COUNT} concurrently)`);
             
             // Check if the OS implicitly already holds the completed variation payload securely from a prior execution boundary natively
             if (loopIndex !== null) {
@@ -215,7 +217,7 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
                 if (existingFiles.length > 0) {
                     console.log(`[Cache Hit] Image heavily cached natively on OS payload (${existingFiles[0]}). Bypassing Google Gemini pings redundantly!`);
                     if (i === 0 && variation === 0) { try { await authPage.close(); } catch(e){} }
-                    continue; 
+                    return; 
                 }
             }
             
@@ -247,7 +249,7 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
                     }
                     return found;
                 }
-                findAllShadow('img[src*="googleusercontent.com"], img[src^="blob:"]').forEach(img => img.dataset.downloaded = 'true');
+                findAllShadow('img[src*="googleusercontent.com"], img[src^="blob:"]').forEach(img => img.dataset.downloaded = 'ignore');
             });
 
             // 2. Type prompt
@@ -370,11 +372,11 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
                     await page.keyboard.up('Control');
                     await page.keyboard.press('Backspace');
                 }
-                continue;
+                return;
             }
 
-            console.log('Prompt successfully submitted. Waiting a mandatory 20 seconds for the heavy base rendering to complete natively...');
-            await sleep(20000);
+            console.log('Prompt successfully submitted. Waiting a mandatory 30 seconds for the heavy base rendering to complete natively...');
+            await sleep(30000);
             console.log('Base rendering time elapsed! Polling for complete stabilization...');
 
             // 4. Wait for generation to completely finish
@@ -556,7 +558,11 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
                         return found;
                     }
                     const allImages = findAllShadow('img[src*="googleusercontent.com"], img[src^="blob:"]');
-                    allImages.forEach(img => delete img.dataset.downloaded);
+                    allImages.forEach(img => {
+                        if (img.dataset.downloaded === 'true') {
+                            delete img.dataset.downloaded;
+                        }
+                    });
                 });
             } else {
                 try { await page.close(); } catch (e) {}
@@ -571,9 +577,13 @@ export async function runImageGeneration(imageCountArg, type = 'lineart', theme 
                     try { await page.close(); } catch (e) {}
                 }
             }
-            // Small delay before the next variation tab
-            await sleep(2000);
+            })());
+            // Stagger tabs natively by 1.5s
+            await sleep(1500);
         }
+        await Promise.all(variationPromises);
+        // Small delay before the next prompt
+        await sleep(2000);
     }
 
     console.log(`\nAll prompts processed! Triggered a total of ${expectedDownloads} downloads.`);

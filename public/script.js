@@ -639,11 +639,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
                         // STAGE 5: Final Line Art Renderer
                         setAutoProgress(15 + (80 * (i/totalPages)) + 30, logPrefix + 'Stage 5: Executing Master Line Art renderer pipeline...');
+                        const numVariations = parseInt(document.getElementById('auto-variations').value) || 1;
                         await executeStageWithRetry(logPrefix, 'Stage 5: Executing Master Line Art renderer pipeline', () => 
                             fetch('http://localhost:3000/api/images', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ imageCount: 1, type: 'lineart', theme: theme, loopIndex: pageNum })
+                                body: JSON.stringify({ imageCount: numVariations, type: 'lineart', theme: theme, loopIndex: pageNum })
                             })
                         );
 
@@ -673,7 +674,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         attachModularMasterCard({
                             draftImage: latestDraft,
                             prompt: finalizedVisionPrompt,
-                            lineArtImages: [activeLineArts[0]]
+                            lineArtImages: activeLineArts
                         }, theme, pageNum, cardContainer);
                         
                     }

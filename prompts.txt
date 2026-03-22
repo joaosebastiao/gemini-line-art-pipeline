@@ -1,4 +1,4 @@
-Image theme: A young woman uses a telescope in a future space station featuring a robot, a planet, a star map, a helmet, and a computer screen.Prompt:Generate an illustration in exactly the same art style as the reference illustrations. Black and white line art, no shading at all. Aspect ratio square 1:1. Framing: A square aspect ratio enclosed within a thick, hand-drawn black border.
+Generate an illustration in exactly the same art style as the reference illustrations. Black and white line art, no shading at all. Aspect ratio square 1:1. Framing: A square aspect ratio enclosed within a thick, hand-drawn black border.
 Make everything slightly oversized, with no small details. Everything should be smooth and rounded, as if every element of the illustration is cute and inflated. There are no sharp edges in any lines. Everything looks close together and crowded. Have less elements, but each one is bigger, instead of a lot of small elements. Square 1:1 aspect ratio.
 Texture: Absolutely no texture or hatching. If something is made of wood, don't draw the wood grain for example.
 2. Composition & Framing
@@ -6,11 +6,11 @@ Framing: A square aspect ratio enclosed within a thick, hand-drawn black border.
 Perspective: Always generate the illustration in perspective to give the illustration depth
 Layout: A cozy scene with an asymmetrical perspective layout.
 Depth layering:
-Foreground: A robot and an astronaut helmet resting on a cushion.
-Mid-ground: A cute anthropomorphic dog wearing a space suit looking through a telescope. A computer monitor showing wave patterns and icons.
-Background: The interior of a space station cabin with rounded wall panels, a viewing port showing a planet, and a circular window displaying a star map with celestial symbols.
+Foreground: A stone bowl and a fur rug.
+Mid-ground: A cute anthropomorphic dog kneeling on the cave floor near a lizard and a torch on a tripod.
+Background: The cave wall with paintings of a mammoth and bison, and bags hanging from the ceiling.
 3. Subject Matter & Action
-Characters positioning: A cute anthropomorphic dog in a space suit is in the center. A robot is in the lower left.
-Activity: The dog peers through a telescope while the robot remains nearby.
+Characters positioning: A cute anthropomorphic dog is kneeling in the center of the scene with one paw reaching toward the wall. A lizard sits on the ground.
+Activity: A cute anthropomorphic dog is looking at and touching animal paintings on a cave wall.
 4. Detailed Elements
-A telescope, a robot, an astronaut helmet on a cushion, a computer screen with graphs, control buttons, wall-mounted pipes, a jar, a screen displaying a landscape, a planet, and a star map.
+Paintings of a mammoth and a bison, a stone bowl, a torch on a tripod, a fur rug, a spear, and bags hanging from the ceiling.
